@@ -7,69 +7,58 @@ from catboost import Pool
 
 def split_data(data, target_name, sensitive_feature_name):
     """
-    :return: the dataset splits (train 70%, validation 15%, test 15%) in the expected format
+    :return: the dataset splits (train 80%, test 20%) in the expected format
     """
     data_nunique = data.nunique()
 
     data_points = len(data)
-    test_size = int(0.15 * data_points)
+    test_size = int(0.20 * data_points)
 
     X_train, X_test = train_test_split(data, test_size=test_size, random_state=42, shuffle=True,
                                        stratify=data[sensitive_feature_name])
 
-    X_train, X_val = train_test_split(X_train, test_size=test_size, random_state=42, shuffle=True,
-                                      stratify=X_train[sensitive_feature_name])
-
     y_train = X_train[target_name]
-    y_val = X_val[target_name]
     y_test = X_test[target_name]
 
     X_train = X_train.drop(columns=[target_name]).reset_index(drop=True)
-    X_val = X_val.drop(columns=[target_name]).reset_index(drop=True)
     X_test = X_test.drop(columns=[target_name]).reset_index(drop=True)
     y_train = y_train.reset_index(drop=True)
-    y_val = y_val.reset_index(drop=True)
     y_test = y_test.reset_index(drop=True)
 
-    return X_train, y_train, X_val, y_val, X_test, y_test, data_nunique
+    return X_train, y_train, X_test, y_test, data_nunique
 
 
 def convert_to_cat_datasets(data, target_name, sensitive_feature_name, categorical_columns):
-    X_train, y_train, X_val, y_val, X_test, y_test, data_nunique = \
+    X_train, y_train, X_test, y_test, data_nunique = \
         split_data(data, target_name, sensitive_feature_name)
 
     train_data = Pool(X_train, label=y_train, cat_features=categorical_columns)
-    val_data = Pool(X_val, label=y_val, cat_features=categorical_columns)
     test_data = Pool(X_test, label=y_test, cat_features=categorical_columns)
 
     return {
-        'raw_data': {'train': X_train, 'val': X_val, 'test': X_test},
+        'raw_data': {'train': X_train, 'test': X_test},
         'nunique': data_nunique,
         'cat_cols': categorical_columns,
         'train': train_data,
-        'val': val_data,
         'test': test_data,
         'target_name': target_name,
         'sensitive_feature_name': sensitive_feature_name,
         'sf_name': sensitive_feature_name,
         'sf_train': X_train[sensitive_feature_name],
-        'sf_val': X_val[sensitive_feature_name],
         'sf_test': X_test[sensitive_feature_name]
     }
 
 
 def convert_to_gbm_datasets(data):
     X_train = data['raw_data']['train']
-    X_val = data['raw_data']['val']
     X_test = data['raw_data']['test']
     y_train = data['train'].get_label()
-    y_val = data['val'].get_label()
     y_test = data['test'].get_label()
     data_nunique = data['nunique']
     categorical_columns = data['cat_cols']
 
     def convert_categorical_to_int(dfs: dict, categorical_columns):
-        df = pd.concat([dfs['train'], dfs['val'], dfs['test']], axis=0).reset_index(drop=True)
+        df = pd.concat([dfs['train'], dfs['test']], axis=0).reset_index(drop=True)
 
         label_encoders = {}
         for col in categorical_columns:
@@ -84,19 +73,14 @@ def convert_to_gbm_datasets(data):
         assert len(label_encoders[cat].classes_) == data_nunique[cat]
 
         X_train[cat] = label_encoders[cat].transform(X_train[cat])
-        X_val[cat] = label_encoders[cat].transform(X_val[cat])
         X_test[cat] = label_encoders[cat].transform(X_test[cat])
 
     train_data = lgb.Dataset(X_train, label=y_train, feature_name=list(X_train.columns),
                              categorical_feature=categorical_columns, free_raw_data=False).construct()
-    val_data = lgb.Dataset(X_val, label=y_val, feature_name=list(X_val.columns),
-                           categorical_feature=categorical_columns, reference=train_data,
-                           free_raw_data=False).construct()
     test_data = lgb.Dataset(X_test, label=y_test, feature_name=list(X_test.columns),
                             categorical_feature=categorical_columns, free_raw_data=False).construct()
 
     data['train'] = train_data
-    data['val'] = val_data
     data['test'] = test_data
 
     return data
