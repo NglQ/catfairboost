@@ -13,22 +13,26 @@ from sklearn.metrics import precision_score, accuracy_score, recall_score, f1_sc
 import matplotlib.pyplot as plt
 
 from params import lightgbm_params, fairgbm_params
-from load_data import load_diabetes_easy_cat, load_diabetes_easy_gbm, load_diabetes_hard_cat, load_diabetes_hard_gbm
+from load_data import load_diabetes_easy_cat, load_diabetes_easy_gbm, load_diabetes_hard_cat, load_diabetes_hard_gbm, \
+    load_acs_income_cat, load_acs_income_gbm
 
 # Suppress specific warnings
-warnings.filterwarnings("ignore", message="Found `num_iterations` in params. Will use it instead of argument")
-warnings.filterwarnings("ignore", category=FutureWarning, message=".*ChainedAssignmentError.*")
+warnings.filterwarnings('ignore', message='Found `num_iterations` in params. Will use it instead of argument')
+warnings.filterwarnings('ignore', category=FutureWarning, message='.*ChainedAssignmentError.*')
 
 # Set the display format for floating point numbers to 4 decimal places
-# TODO: temporary fix to show all df cols
 pd.options.display.float_format = '{:.4f}'.format
+
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', None)
 
 # Set seed for consistent results with ExponentiatedGradient
 np.random.seed(42)
 
 # TODO:
-#  - implement unconstrained models with `error-parity` library
 #  - implementing load functions for folktables
+#  - hyperparameter tuning (optuna)
+#  - implement unconstrained models with `error-parity` library
 #  - training tests with all models
 #  - pareto frontier plots
 
@@ -129,7 +133,7 @@ def train_base_fairgbm(data):
     )
 
     start = time()
-    fairgbm_clf.fit(X_train, y_train, constraint_group=X_train['race'].to_list())
+    fairgbm_clf.fit(X_train, y_train, constraint_group=X_train[data['sf_name']].to_list())
     end = time()
 
     # Predict
@@ -144,7 +148,7 @@ def train_base_fairgbm(data):
 
 
 if __name__ == '__main__':
-    data = load_diabetes_hard_gbm()
+    data = load_acs_income_gbm()
     data, y_pred, training_time = train_fair_catboost(data)
 
     y_true = data['test'].get_label()

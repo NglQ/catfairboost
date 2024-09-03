@@ -8,9 +8,10 @@ lightgbm_params = {
 }
 
 fairgbm_params = {
+    'multiplier_learning_rate': 0.005,
     'num_iterations': 100,
     'device_type': 'cpu',
-    'num_threads': -2,
+    'num_threads': 8,
     'seed': 42,
     'deterministic': 'true'
 }

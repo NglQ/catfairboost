@@ -1,8 +1,12 @@
+import os
+
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 import lightgbm as lgb
 from catboost import Pool
+
+from folktables import ACSDataSource, generate_categories, ACSIncome
 
 
 def split_data(data, target_name, sensitive_feature_name):
@@ -129,6 +133,36 @@ def load_diabetes_hard_cat():
     return convert_to_cat_datasets(data, target_name, sensitive_feature_name, categorical_columns)
 
 
+def load_acs_income_cat():
+    """
+    Source: https://github.com/socialfoundations/folktables
+    """
+
+    dataset_filepath = 'datasets/acsincome.csv'
+    if os.path.isfile(dataset_filepath):
+        data = pd.read_csv(dataset_filepath)
+    else:
+        data_source = ACSDataSource(survey_year='2018', horizon='1-Year', survey='person')
+        acs_data = data_source.get_data(states=['CA', 'TX', 'WA'], download=True)
+        definition_df = data_source.get_definitions(download=True)
+        categories = generate_categories(features=ACSIncome.features, definition_df=definition_df)
+        X, y, sf = ACSIncome.df_to_pandas(acs_data, categories=categories)
+        data = pd.concat([X, y], axis=1)
+        data.to_csv(dataset_filepath, index=False)
+
+    target_name = ACSIncome.target
+    sensitive_feature_name = ACSIncome.group
+    categorical_columns = ['COW', 'SCHL', 'MAR', 'OCCP', 'POBP', 'RELP', 'SEX', 'RAC1P']
+
+    # Convert target into binary
+    data[ACSIncome.target] = data[ACSIncome.target].astype('int64')
+
+    data['AGEP'] = data['AGEP'].astype('int64')
+    data['WKHP'] = data['WKHP'].astype('int64')
+
+    return convert_to_cat_datasets(data, target_name, sensitive_feature_name, categorical_columns)
+
+
 def load_diabetes_easy_gbm():
     data = load_diabetes_easy_cat()
     return convert_to_gbm_datasets(data)
@@ -136,4 +170,9 @@ def load_diabetes_easy_gbm():
 
 def load_diabetes_hard_gbm():
     data = load_diabetes_hard_cat()
+    return convert_to_gbm_datasets(data)
+
+
+def load_acs_income_gbm():
+    data = load_acs_income_cat()
     return convert_to_gbm_datasets(data)
