@@ -1,5 +1,6 @@
 from time import time
 import warnings
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -31,7 +32,7 @@ pd.set_option('display.max_rows', None)
 np.random.seed(42)
 
 # TODO:
-#  - change sampler?
+#  - change hpt sampler?
 #  - implement unconstrained models with `error-parity` library
 #  - pareto frontier plots
 
@@ -53,13 +54,14 @@ def train_base_lightgbm(data):
     return data, y_pred, training_time
 
 
+class LightFairGBM(lgb.LGBMClassifier):
+    def fit(self, *args, **kwargs):
+        kwargs['categorical_feature'] = data['cat_cols']
+        super().fit(*args, **kwargs)
+
+
 def train_fair_lightgbm(data):
     print('--- START LightFairGBM ---')
-
-    class LightFairGBM(lgb.LGBMClassifier):
-        def fit(self, *args, **kwargs):
-            kwargs['categorical_feature'] = data['cat_cols']
-            super().fit(*args, **kwargs)
 
     model = LightFairGBM(verbose=0)
     model.set_params(**lightgbm_params)
@@ -71,6 +73,12 @@ def train_fair_lightgbm(data):
     start = time()
     estimator.fit(data['raw_data']['train'], data['train'].get_label(), sensitive_features=data['sf_train'])
     end = time()
+
+    # TODO: For future use
+    #  with open('models/lightfairgbm.pkl', 'wb') as f:
+    #      pickle.dump(estimator, f)
+    #  with open('models/lightfairgbm.pkl', 'rb') as f:
+    #      loaded_model = pickle.load(f)
 
     y_pred = estimator.predict(data['raw_data']['test'])
 
@@ -110,6 +118,12 @@ def train_fair_catboost(data):
     estimator.fit(data['raw_data']['train'], data['train'].get_label(), sensitive_features=data['sf_train'])
     end = time()
 
+    # TODO: for future use
+    #  with open('models/catfairgbm.pkl', 'wb') as f:
+    #      pickle.dump(estimator, f)
+    #  with open('models/catfairgbm.pkl', 'rb') as f:
+    #      loaded_model = pickle.load(f)
+
     y_pred = estimator.predict(data['raw_data']['test'])
 
     training_time = end - start
@@ -135,6 +149,12 @@ def train_base_fairgbm(data):
     fairgbm_clf.fit(X_train, y_train, constraint_group=X_train[data['sf_name']].to_list())
     end = time()
 
+    # TODO: for future use
+    #  with open('models/fairgbm.pkl', 'wb') as f:
+    #      pickle.dump(fairgbm_clf, f)
+    #  with open('models/fairgbm.pkl', 'rb') as f:
+    #      loaded_model = pickle.load(f)
+
     # Predict
     y_pred_proba = fairgbm_clf.predict_proba(X_test)[:, -1]
     # Convert probabilities to class labels
@@ -147,8 +167,8 @@ def train_base_fairgbm(data):
 
 
 if __name__ == '__main__':
-    data = load_acs_problem_cat(ACSMobility, 'datasets/acsmobility.csv')
-    data, y_pred, training_time = train_base_catboost(data)
+    data = load_acs_problem_gbm(ACSMobility, 'datasets/acsmobility.csv')
+    data, y_pred, training_time = train_fair_lightgbm(data)
 
     y_true = data['test'].get_label()
     sensitive_features = data['sf_test']
