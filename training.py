@@ -31,15 +31,13 @@ pd.set_option('display.max_rows', None)
 np.random.seed(42)
 
 # TODO:
+#  - change sampler?
 #  - implement unconstrained models with `error-parity` library
 #  - pareto frontier plots
 
 
 def train_base_lightgbm(data):
     print('--- START LightGBM ---')
-
-    lightgbm_params.update({'num_iterations': 1000, 'max_depth': 84, 'num_leaves': 56, 'min_data_in_leaf': 5,
-                            'learning_rate': 0.02478172079975098, 'lambda_l1': 1e-05, 'lambda_l2': 1.0})
 
     start = time()
     lightgbm_model = lgb.train(lightgbm_params, data['train'])
