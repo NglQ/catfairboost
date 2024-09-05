@@ -1,12 +1,13 @@
 import os
 
+import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 import lightgbm as lgb
 from catboost import Pool
 
-from folktables import ACSDataSource, generate_categories, ACSIncome
+from folktables import ACSDataSource, generate_categories
 
 
 def split_data(data, target_name, sensitive_feature_name):
@@ -86,11 +87,17 @@ def convert_to_gbm_datasets(data):
 
     data['train'] = train_data
     data['test'] = test_data
+    data['sf_train'] = data['raw_data']['train'][data['sf_name']]
+    data['sf_test'] = data['raw_data']['test'][data['sf_name']]
 
     return data
 
 
 def load_diabetes_easy_cat():
+    """
+    Source: https://www.kaggle.com/datasets/priyamchoksi/100000-diabetes-clinical-dataset/data
+    """
+
     data = pd.read_csv('datasets/diabetes_easy.csv')
 
     target_name = 'diabetes'
@@ -109,6 +116,7 @@ def load_diabetes_hard_cat():
     """
     Source: https://archive.ics.uci.edu/dataset/296/diabetes+130-us+hospitals+for+years+1999-2008
     """
+
     data = pd.read_csv('datasets/diabetes_hard.csv')
 
     target_name = 'readmitted'
@@ -133,32 +141,42 @@ def load_diabetes_hard_cat():
     return convert_to_cat_datasets(data, target_name, sensitive_feature_name, categorical_columns)
 
 
-def load_acs_income_cat():
+def load_acs_problem_cat(problem_class, dataset_filepath):
     """
     Source: https://github.com/socialfoundations/folktables
     """
 
-    dataset_filepath = 'datasets/acsincome.csv'
+    data_source = ACSDataSource(survey_year='2018', horizon='1-Year', survey='person')
+
     if os.path.isfile(dataset_filepath):
         data = pd.read_csv(dataset_filepath)
+        definition_df = data_source.get_definitions(download=True)
+        categories = generate_categories(features=problem_class.features, definition_df=definition_df)
     else:
-        data_source = ACSDataSource(survey_year='2018', horizon='1-Year', survey='person')
         acs_data = data_source.get_data(states=['CA', 'TX', 'WA'], download=True)
         definition_df = data_source.get_definitions(download=True)
-        categories = generate_categories(features=ACSIncome.features, definition_df=definition_df)
-        X, y, sf = ACSIncome.df_to_pandas(acs_data, categories=categories)
+        categories = generate_categories(features=problem_class.features, definition_df=definition_df)
+        X, y, sf = problem_class.df_to_pandas(acs_data, categories=categories)
         data = pd.concat([X, y], axis=1)
         data.to_csv(dataset_filepath, index=False)
 
-    target_name = ACSIncome.target
-    sensitive_feature_name = ACSIncome.group
-    categorical_columns = ['COW', 'SCHL', 'MAR', 'OCCP', 'POBP', 'RELP', 'SEX', 'RAC1P']
+    target_name = problem_class.target
+    sensitive_feature_name = problem_class.group
+    categorical_columns = list(categories)
 
-    # Convert target into binary
-    data[ACSIncome.target] = data[ACSIncome.target].astype('int64')
+    for col in data.columns:
+        if (data[col] == -1).any() == True:
+            data[col] = data[col].apply(lambda x: np.nan if x == -1 else x)
+            print(f'Found column {col} with -1 values! Replacing them...')
 
-    data['AGEP'] = data['AGEP'].astype('int64')
-    data['WKHP'] = data['WKHP'].astype('int64')
+        if data[col].isna().any() == True:
+            mode = data[col].mode()[0]
+            data[col] = data[col].fillna(mode)
+            print(f'Found column {col} with nan values! Replacing them...')
+
+    cols_to_convert = list(set(data.columns) - set(categories))
+    for col in cols_to_convert:
+        data[col] = data[col].astype('int64')
 
     return convert_to_cat_datasets(data, target_name, sensitive_feature_name, categorical_columns)
 
@@ -173,6 +191,6 @@ def load_diabetes_hard_gbm():
     return convert_to_gbm_datasets(data)
 
 
-def load_acs_income_gbm():
-    data = load_acs_income_cat()
+def load_acs_problem_gbm(problem_class, dataset_filepath):
+    data = load_acs_problem_cat(problem_class, dataset_filepath)
     return convert_to_gbm_datasets(data)
