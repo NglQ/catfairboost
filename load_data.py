@@ -10,6 +10,40 @@ from catboost import Pool
 from folktables import ACSDataSource, generate_categories
 
 
+def get_splits(data):
+    X_other = data['raw_data']['train']
+    X_test = data['raw_data']['test']
+    y_other = data['train'].get_label()
+    y_test = data['test'].get_label()
+    s_other = data['sf_train']
+    s_test = data['sf_test']
+
+    data_points = int(0.5 * len(X_test))
+
+    X_train, X_val, y_train, y_val, s_train, s_val = train_test_split(X_other, y_other, s_other,
+                                                                      test_size=data_points, random_state=42,
+                                                                      shuffle=True, stratify=s_other)
+
+    X_train.reset_index(drop=True, inplace=True)
+    X_val.reset_index(drop=True, inplace=True)
+    X_test.reset_index(drop=True, inplace=True)
+    s_train.reset_index(drop=True, inplace=True)
+    s_val.reset_index(drop=True, inplace=True)
+    s_test.reset_index(drop=True, inplace=True)
+
+    return {
+        'X_train': X_train,
+        'X_val': X_val,
+        'X_test': X_test,
+        'y_train': y_train,
+        'y_val': y_val,
+        'y_test': y_test,
+        's_train': s_train,
+        's_val': s_val,
+        's_test': s_test
+    }
+
+
 def split_data(data, target_name, sensitive_feature_name):
     """
     :return: the dataset splits (train 80%, test 20%) in the expected format
@@ -93,12 +127,12 @@ def convert_to_gbm_datasets(data):
     return data
 
 
-def load_diabetes_easy_cat():
+def load_diabetes_easy_cat(problem_class: None, dataset_filepath):
     """
     Source: https://www.kaggle.com/datasets/priyamchoksi/100000-diabetes-clinical-dataset/data
     """
 
-    data = pd.read_csv('datasets/diabetes_easy.csv')
+    data = pd.read_csv(dataset_filepath)
 
     target_name = 'diabetes'
     sensitive_feature_name = 'race'
@@ -112,12 +146,12 @@ def load_diabetes_easy_cat():
     return convert_to_cat_datasets(data, target_name, sensitive_feature_name, categorical_columns)
 
 
-def load_diabetes_hard_cat():
+def load_diabetes_hard_cat(problem_class: None, dataset_filepath):
     """
     Source: https://archive.ics.uci.edu/dataset/296/diabetes+130-us+hospitals+for+years+1999-2008
     """
 
-    data = pd.read_csv('datasets/diabetes_hard.csv')
+    data = pd.read_csv(dataset_filepath)
 
     target_name = 'readmitted'
     sensitive_feature_name = 'race'
@@ -181,13 +215,13 @@ def load_acs_problem_cat(problem_class, dataset_filepath):
     return convert_to_cat_datasets(data, target_name, sensitive_feature_name, categorical_columns)
 
 
-def load_diabetes_easy_gbm():
-    data = load_diabetes_easy_cat()
+def load_diabetes_easy_gbm(problem_class: None, dataset_filepath):
+    data = load_diabetes_easy_cat(problem_class, dataset_filepath)
     return convert_to_gbm_datasets(data)
 
 
-def load_diabetes_hard_gbm():
-    data = load_diabetes_hard_cat()
+def load_diabetes_hard_gbm(problem_class: None, dataset_filepath):
+    data = load_diabetes_hard_cat(problem_class, dataset_filepath)
     return convert_to_gbm_datasets(data)
 
 

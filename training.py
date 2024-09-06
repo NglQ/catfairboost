@@ -16,11 +16,12 @@ from folktables import ACSIncome, ACSEmployment, ACSIncomePovertyRatio, ACSMobil
 
 from params import lightgbm_params, fairgbm_params
 from load_data import load_diabetes_easy_cat, load_diabetes_easy_gbm, load_diabetes_hard_cat, load_diabetes_hard_gbm, \
-    load_acs_problem_cat, load_acs_problem_gbm
+    load_acs_problem_cat, load_acs_problem_gbm, get_splits
 
 # Suppress specific warnings
 warnings.filterwarnings('ignore', message='Found `num_iterations` in params. Will use it instead of argument')
 warnings.filterwarnings('ignore', category=FutureWarning, message='.*ChainedAssignmentError.*')
+warnings.filterwarnings('ignore', message='.*DataFrame is highly fragmented.*')
 
 # Set the display format for floating point numbers to 4 decimal places
 pd.options.display.float_format = '{:.4f}'.format
@@ -37,138 +38,157 @@ np.random.seed(42)
 #  - pareto frontier plots
 
 
-def train_base_lightgbm(data):
+def train_base_lightgbm(data, data_splits, training_params):
     print('--- START LightGBM ---')
 
+    train_data = lgb.Dataset(data_splits['X_train'], label=data_splits['y_train'],
+                             feature_name=list(data_splits['X_train'].columns),
+                             categorical_feature=data['cat_cols'], free_raw_data=False).construct()
+
     start = time()
-    lightgbm_model = lgb.train(lightgbm_params, data['train'])
+    lightgbm_model = lgb.train(training_params, train_data)
     end = time()
 
-    y_pred_proba = lightgbm_model.predict(data['raw_data']['test'])
+    y_pred_proba = lightgbm_model.predict(data_splits['X_test'])
     # Convert probabilities to class labels
     y_pred = (y_pred_proba > 0.5).astype(int)
 
     training_time = end - start
     print('--- END LightGBM ---')
 
-    return data, y_pred, training_time
+    return lightgbm_model, data, y_pred, training_time
 
 
 class LightFairGBM(lgb.LGBMClassifier):
     def fit(self, *args, **kwargs):
+        for el in data['cat_cols']:
+            assert isinstance(el, str)
         kwargs['categorical_feature'] = data['cat_cols']
         super().fit(*args, **kwargs)
 
 
-def train_fair_lightgbm(data):
+def train_fair_lightgbm(data, data_splits, training_params):
     print('--- START LightFairGBM ---')
 
     model = LightFairGBM(verbose=0)
-    model.set_params(**lightgbm_params)
+    model.set_params(**training_params)
 
     estimator = ExponentiatedGradient(
         estimator=model,
         constraints=EqualizedOdds()
     )
     start = time()
-    estimator.fit(data['raw_data']['train'], data['train'].get_label(), sensitive_features=data['sf_train'])
+    estimator.fit(data_splits['X_train'], data_splits['y_train'], sensitive_features=data_splits['s_train'])
     end = time()
 
-    # TODO: For future use
-    #  with open('models/lightfairgbm.pkl', 'wb') as f:
-    #      pickle.dump(estimator, f)
-    #  with open('models/lightfairgbm.pkl', 'rb') as f:
-    #      loaded_model = pickle.load(f)
-
-    y_pred = estimator.predict(data['raw_data']['test'])
+    y_pred = estimator.predict(data_splits['X_test'])
 
     training_time = end - start
     print('--- END LightFairGBM ---')
 
-    return data, y_pred, training_time
+    return estimator, data, y_pred, training_time
 
 
-def train_base_catboost(data):
+def train_base_catboost(data, data_splits, training_params):
     print('--- START CatBoost ---')
 
-    model = CatBoostClassifier(iterations=100, random_seed=42, verbose=False, thread_count=-1)
+    training_params.update({'cat_features': data['cat_cols']})
+
+    # In `training_params` kwargs dict expecting value `cat_features`
+    assert 'cat_features' in training_params, 'Expected `cat_features` in training_params'
+    model = CatBoostClassifier(**training_params)
 
     start = time()
-    model.fit(data['train'])
+    model.fit(data_splits['X_train'], data_splits['y_train'])
     end = time()
-    y_pred = model.predict(data['test'])
+    y_pred = model.predict(data_splits['X_test'])
 
     training_time = end - start
     print('--- END CatBoost ---')
 
-    return data, y_pred, training_time
+    return model, data, y_pred, training_time
 
 
-def train_fair_catboost(data):
+def train_fair_catboost(data, data_splits, training_params):
     print('--- START CatFairBoost ---')
 
-    model = CatBoostClassifier(iterations=100, random_seed=42, cat_features=data['cat_cols'], verbose=False,
-                               thread_count=-1)
+    training_params.update({'cat_features': data['cat_cols']})
+
+    # In `training_params` kwargs dict expecting value `cat_features`
+    assert 'cat_features' in training_params, 'Expected `cat_features` in training_params'
+    model = CatBoostClassifier(**training_params)
 
     estimator = ExponentiatedGradient(
         estimator=model,
         constraints=EqualizedOdds()
     )
     start = time()
-    estimator.fit(data['raw_data']['train'], data['train'].get_label(), sensitive_features=data['sf_train'])
+    estimator.fit(data_splits['X_train'], data_splits['y_train'], sensitive_features=data_splits['s_train'])
     end = time()
 
-    # TODO: for future use
-    #  with open('models/catfairgbm.pkl', 'wb') as f:
-    #      pickle.dump(estimator, f)
-    #  with open('models/catfairgbm.pkl', 'rb') as f:
-    #      loaded_model = pickle.load(f)
-
-    y_pred = estimator.predict(data['raw_data']['test'])
+    y_pred = estimator.predict(data_splits['X_test'])
 
     training_time = end - start
     print('--- END CatFairBoost ---')
 
-    return data, y_pred, training_time
+    return estimator, data, y_pred, training_time
 
 
-def train_base_fairgbm(data):
+def train_base_fairgbm(data, data_splits, training_params):
     print('--- START FairGBM ---')
-
-    X_train = data['raw_data']['train']
-    X_test = data['raw_data']['test']
-    y_train = data['train'].get_label()
 
     # Instantiate
     fairgbm_clf = FairGBMClassifier(
         constraint_type='FNR,FPR',
-        **fairgbm_params,
+        **training_params,
     )
 
     start = time()
-    fairgbm_clf.fit(X_train, y_train, constraint_group=X_train[data['sf_name']].to_list())
+    # TODO: it seems that FairGBM ignores the categorical features if they are not set in the dataset
+    fairgbm_clf.fit(data_splits['X_train'], data_splits['y_train'], constraint_group=data_splits['s_train'].to_list(),
+                    categorical_feature=data['cat_cols'])
     end = time()
 
-    # TODO: for future use
-    #  with open('models/fairgbm.pkl', 'wb') as f:
-    #      pickle.dump(fairgbm_clf, f)
-    #  with open('models/fairgbm.pkl', 'rb') as f:
-    #      loaded_model = pickle.load(f)
-
     # Predict
-    y_pred_proba = fairgbm_clf.predict_proba(X_test)[:, -1]
+    y_pred_proba = fairgbm_clf.predict_proba(data_splits['X_test'])[:, -1]
     # Convert probabilities to class labels
     y_pred = (y_pred_proba > 0.5).astype(int)
 
     training_time = end - start
     print('--- END FairGBM ---')
 
-    return data, y_pred, training_time
+    return fairgbm_clf, data, y_pred, training_time
 
 
 if __name__ == '__main__':
-    data = load_acs_problem_gbm(ACSMobility, 'datasets/acsmobility.csv')
-    data, y_pred, training_time = train_fair_lightgbm(data)
+    lightgbm_params = {
+        'num_iterations': 100,
+        'objective': 'binary',
+        'device_type': 'cpu',
+        'num_threads': 8,
+        'seed': 42,
+        'deterministic': 'true'
+    }
+
+    fairgbm_params = {
+        'multiplier_learning_rate': 0.005,
+        'num_iterations': 100,
+        'device_type': 'cpu',
+        'num_threads': 8,
+        'seed': 42,
+        'deterministic': 'true'
+    }
+
+    catboost_params = {
+        'iterations': 100,
+        'random_seed': 42,
+        'verbose': False,
+        'thread_count': -1
+    }
+
+    data = load_acs_problem_gbm(ACSEmployment, 'datasets/acsemployment.csv')
+    data_splits = get_splits(data)
+    model, data, y_pred, training_time = train_base_fairgbm(data, data_splits, fairgbm_params)
 
     y_true = data['test'].get_label()
     sensitive_features = data['sf_test']
