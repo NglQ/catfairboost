@@ -15,3 +15,10 @@ fairgbm_params = {
     'seed': 42,
     'deterministic': 'true'
 }
+
+catboost_params = {
+    'iterations': 100,
+    'random_seed': 42,
+    'verbose': False,
+    'thread_count': -1
+}

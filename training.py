@@ -33,6 +33,7 @@ pd.set_option('display.max_rows', None)
 np.random.seed(42)
 
 # TODO:
+#  - it seems that FairGBM ignores the categorical features if they are not set in the dataset
 #  - change hpt sampler?
 #  - implement unconstrained models with `error-parity` library
 #  - pareto frontier plots
@@ -45,18 +46,19 @@ def train_base_lightgbm(data, data_splits, training_params):
                              feature_name=list(data_splits['X_train'].columns),
                              categorical_feature=data['cat_cols'], free_raw_data=False).construct()
 
+    model = lgb.LGBMClassifier(verbose=0)
+    model.set_params(**training_params)
+
     start = time()
-    lightgbm_model = lgb.train(training_params, train_data)
+    model.fit(data_splits['X_train'], data_splits['y_train'])
     end = time()
 
-    y_pred_proba = lightgbm_model.predict(data_splits['X_test'])
-    # Convert probabilities to class labels
-    y_pred = (y_pred_proba > 0.5).astype(int)
+    y_pred = model.predict(data_splits['X_test'])
 
     training_time = end - start
     print('--- END LightGBM ---')
 
-    return lightgbm_model, data, y_pred, training_time
+    return model, data, y_pred, training_time
 
 
 class LightFairGBM(lgb.LGBMClassifier):
