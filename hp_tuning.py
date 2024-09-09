@@ -1,5 +1,6 @@
 import os
 import pickle
+import itertools
 from copy import deepcopy
 
 import numpy as np
@@ -15,6 +16,8 @@ from folktables import ACSIncome, ACSEmployment, ACSIncomePovertyRatio, ACSMobil
 from params_models import lightgbm_params, fairgbm_params, catboost_params
 from load_data import load_diabetes_easy_cat, load_diabetes_easy_gbm, load_diabetes_hard_cat, load_diabetes_hard_gbm, \
     load_acs_problem_cat, load_acs_problem_gbm, get_splits
+from params_pipeline import dataset_names, dataset_name_to_load_fn, dataset_name_to_problem_class
+
 
 np.random.seed(42)
 
@@ -88,7 +91,7 @@ def hpt_lightgbm(data) -> pd.DataFrame:
 
     sampler = optuna.samplers.RandomSampler(seed=42)
     study = optuna.create_study(sampler=sampler, direction='maximize')
-    study.optimize(objective, n_trials=100, show_progress_bar=True)
+    study.optimize(objective, n_trials=2, show_progress_bar=True)
 
     print('Number of finished trials:', len(study.trials))
     print('Best trial:', study.best_trial.params)
@@ -168,7 +171,7 @@ def hpt_fairgbm(data) -> pd.DataFrame:
 
     sampler = optuna.samplers.RandomSampler(seed=42)
     study = optuna.create_study(sampler=sampler, direction='maximize')
-    study.optimize(objective, n_trials=100, show_progress_bar=True)
+    study.optimize(objective, n_trials=2, show_progress_bar=True)
 
     print('Number of finished trials:', len(study.trials))
     print('Best trial:', study.best_trial.params)
@@ -218,7 +221,7 @@ def hpt_catboost(data) -> pd.DataFrame:
 
     sampler = optuna.samplers.RandomSampler(seed=42)
     study = optuna.create_study(sampler=sampler, direction='maximize')
-    study.optimize(objective, n_trials=100, show_progress_bar=True)
+    study.optimize(objective, n_trials=2, show_progress_bar=True)
 
     print('Number of finished trials:', len(study.trials))
     print('Best trial:', study.best_trial.params)
@@ -226,12 +229,27 @@ def hpt_catboost(data) -> pd.DataFrame:
 
 
 if __name__ == '__main__':
+    model_names_hpt = ['lightgbm', 'fairgbm', 'catboost']
+    model_name_to_hpt_fn = {'lightgbm': hpt_lightgbm,
+                            'fairgbm': hpt_fairgbm,
+                            'catboost': hpt_catboost}
+
     os.makedirs('hpt', exist_ok=True)
+    os.makedirs('datasets', exist_ok=True)
 
-    data = load_diabetes_easy_gbm(None, 'datasets/diabetes_easy.csv')
-    results = hpt_catboost(data)
+    print('Hyperparameter tuning of our algos using random search')
 
-    with open('hpt/diabetes_easy_lightgbm.pkl', 'wb') as f:
-        pickle.dump(results, f)
+    for dataset_name, model_name in itertools.product(dataset_names, model_names_hpt):
+        print(f'\n --- Dataset: {dataset_name} - Model: {model_name} ---\n')
+        load_fn = dataset_name_to_load_fn[dataset_name]
+        problem_class = dataset_name_to_problem_class[dataset_name]
+        dataset_filepath = f'datasets/{dataset_name}.csv'
+        hpt_fn = model_name_to_hpt_fn[model_name]
 
-    print()
+        data = load_fn(problem_class, dataset_filepath)
+        results = hpt_fn(data)
+
+        with open(f'hpt/{dataset_name}_{model_name}.pkl', 'wb') as f:
+            pickle.dump(results, f)
+
+        print('\n---\n')
