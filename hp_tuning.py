@@ -11,11 +11,9 @@ import lightgbm as lgb
 import catboost as cb
 from fairgbm import FairGBMClassifier
 import optuna
-from folktables import ACSIncome, ACSEmployment, ACSIncomePovertyRatio, ACSMobility
 
-from params_models import lightgbm_params, fairgbm_params, catboost_params
-from load_data import load_diabetes_easy_cat, load_diabetes_easy_gbm, load_diabetes_hard_cat, load_diabetes_hard_gbm, \
-    load_acs_problem_cat, load_acs_problem_gbm, get_splits
+from params_models import lightgbm_params, fairgbm_params
+from load_data import get_splits
 from params_pipeline import dataset_names, dataset_name_to_load_fn, dataset_name_to_problem_class
 
 
@@ -25,7 +23,7 @@ np.random.seed(42)
 def hpt_lightgbm(data) -> pd.DataFrame:
     data_splits = get_splits(data)
     results = pd.DataFrame()
-    results['metric'] = ['val_acc', 'val_eod']
+    results['metric'] = ['test_acc', 'test_eod']
 
     def objective(trial):
         enable_bagging = trial.suggest_categorical('enable_bagging', [True, False])
@@ -80,18 +78,22 @@ def hpt_lightgbm(data) -> pd.DataFrame:
 
         y_pred = model.predict(data_splits['X_val'])
 
-        accuracy = accuracy_score(data_splits['y_val'], y_pred)
-        eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
-        results[str(params)] = [accuracy, eod]
+        val_accuracy = accuracy_score(data_splits['y_val'], y_pred)
 
-        print('Accuracy: ', accuracy)
-        print('Equalized odds diff: ', eod)
+        # --- test results not used in the hyperparameter tuning ---
+        y_pred = model.predict(data_splits['X_test'])
+        test_accuracy = accuracy_score(data_splits['y_test'], y_pred)
+        test_eod = equalized_odds_difference(data_splits['y_test'], y_pred, sensitive_features=data_splits['s_test'])
+        results[str(params)] = [test_accuracy, test_eod]
 
-        return accuracy
+        print('Test accuracy: ', test_accuracy)
+        print('Test equalized odds diff: ', test_eod)
+
+        return val_accuracy
 
     sampler = optuna.samplers.RandomSampler(seed=42)
     study = optuna.create_study(sampler=sampler, direction='maximize')
-    study.optimize(objective, n_trials=2, show_progress_bar=True)
+    study.optimize(objective, n_trials=100, show_progress_bar=True)
 
     print('Number of finished trials:', len(study.trials))
     print('Best trial:', study.best_trial.params)
@@ -101,7 +103,7 @@ def hpt_lightgbm(data) -> pd.DataFrame:
 def hpt_fairgbm(data) -> pd.DataFrame:
     data_splits = get_splits(data)
     results = pd.DataFrame()
-    results['metric'] = ['val_acc', 'val_eod']
+    results['metric'] = ['test_acc', 'test_eod']
 
     def objective(trial):
         enable_bagging = trial.suggest_categorical('enable_bagging', [True, False])
@@ -160,18 +162,23 @@ def hpt_fairgbm(data) -> pd.DataFrame:
 
         y_pred = model.predict(data_splits['X_val'])
 
-        accuracy = accuracy_score(data_splits['y_val'], y_pred)
-        eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
-        results[str(params)] = [accuracy, eod]
+        val_accuracy = accuracy_score(data_splits['y_val'], y_pred)
+        val_eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
 
-        print('Accuracy: ', accuracy)
-        print('Equalized odds diff: ', eod)
+        # --- test results not used in the hyperparameter tuning ---
+        y_pred = model.predict(data_splits['X_test'])
+        test_accuracy = accuracy_score(data_splits['y_test'], y_pred)
+        test_eod = equalized_odds_difference(data_splits['y_test'], y_pred, sensitive_features=data_splits['s_test'])
+        results[str(params)] = [test_accuracy, test_eod]
 
-        return max(0, accuracy - eod)
+        print('Test accuracy: ', test_accuracy)
+        print('Test equalized odds diff: ', test_eod)
+
+        return max(0, val_accuracy - val_eod)
 
     sampler = optuna.samplers.RandomSampler(seed=42)
     study = optuna.create_study(sampler=sampler, direction='maximize')
-    study.optimize(objective, n_trials=2, show_progress_bar=True)
+    study.optimize(objective, n_trials=100, show_progress_bar=True)
 
     print('Number of finished trials:', len(study.trials))
     print('Best trial:', study.best_trial.params)
@@ -181,7 +188,7 @@ def hpt_fairgbm(data) -> pd.DataFrame:
 def hpt_catboost(data) -> pd.DataFrame:
     data_splits = get_splits(data)
     results = pd.DataFrame()
-    results['metric'] = ['val_acc', 'val_eod']
+    results['metric'] = ['test_acc', 'test_eod']
 
     def objective(trial):
         param = {
@@ -210,18 +217,22 @@ def hpt_catboost(data) -> pd.DataFrame:
 
         y_pred = model.predict(data_splits['X_val'])
 
-        accuracy = accuracy_score(data_splits['y_val'], y_pred)
-        eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
-        results[str(param)] = [accuracy, eod]
+        val_accuracy = accuracy_score(data_splits['y_val'], y_pred)
 
-        print('Accuracy: ', accuracy)
-        print('Equalized odds diff: ', eod)
+        # --- test results not used in the hyperparameter tuning ---
+        y_pred = model.predict(data_splits['X_test'])
+        test_accuracy = accuracy_score(data_splits['y_test'], y_pred)
+        test_eod = equalized_odds_difference(data_splits['y_test'], y_pred, sensitive_features=data_splits['s_test'])
+        results[str(param)] = [test_accuracy, test_eod]
 
-        return accuracy
+        print('Test accuracy: ', test_accuracy)
+        print('Test equalized odds diff: ', test_eod)
+
+        return val_accuracy
 
     sampler = optuna.samplers.RandomSampler(seed=42)
     study = optuna.create_study(sampler=sampler, direction='maximize')
-    study.optimize(objective, n_trials=2, show_progress_bar=True)
+    study.optimize(objective, n_trials=100, show_progress_bar=True)
 
     print('Number of finished trials:', len(study.trials))
     print('Best trial:', study.best_trial.params)
