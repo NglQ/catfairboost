@@ -31,23 +31,15 @@ pd.set_option('display.max_rows', None)
 # Set seed for consistent results with ExponentiatedGradient
 np.random.seed(42)
 
-# TODO:
-#  - change hpt sampler?
-#  - pareto frontier plots
-
 
 def train_base_lightgbm(data, data_splits, training_params):
     print('--- START LightGBM ---')
-
-    train_data = lgb.Dataset(data_splits['X_train'], label=data_splits['y_train'],
-                             feature_name=list(data_splits['X_train'].columns),
-                             categorical_feature=data['cat_cols'], free_raw_data=False).construct()
 
     model = lgb.LGBMClassifier(verbose=0)
     model.set_params(**training_params)
 
     start = time()
-    model.fit(data_splits['X_train'], data_splits['y_train'])
+    model.fit(data_splits['X_train'], data_splits['y_train'], categorical_feature=data['cat_cols'])
     end = time()
 
     y_pred = model.predict(data_splits['X_test'])
@@ -188,7 +180,7 @@ if __name__ == '__main__':
 
     data = load_diabetes_easy_gbm(None, 'datasets/diabetes_easy.csv')
     data_splits = get_splits(data)
-    model, data, y_pred, training_time = train_base_fairgbm(data, data_splits, fairgbm_params)
+    model, data, y_pred, training_time = train_base_lightgbm(data, data_splits, lightgbm_params)
 
     y_true = data['test'].get_label()
     sensitive_features = data['sf_test']
