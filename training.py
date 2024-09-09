@@ -31,6 +31,9 @@ pd.set_option('display.max_rows', None)
 # Set seed for consistent results with ExponentiatedGradient
 np.random.seed(42)
 
+# TODO:
+#  - evaluate best val_acc and compute pareto frontier on that model
+
 
 def train_base_lightgbm(data, data_splits, training_params):
     print('--- START LightGBM ---')

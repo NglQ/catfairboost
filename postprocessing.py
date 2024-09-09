@@ -92,6 +92,7 @@ def pipeline(load_fn,
              predict_method_proba_str,
              results_filepath,
              acc_eod_results_df,
+             hpt_results_filepath=None,
              bootstrap=False,
              tolerance_ticks=None,
              check_model_cache=True,
@@ -125,6 +126,8 @@ def pipeline(load_fn,
     :param acc_eod_results_df: DataFrame that contains the accuracy and equalized odds difference metrics of previous
         calculated methods. It will be updated during the execution of this function. It saves those metrics for fit
         and test sets, before and after unprocessing. A empty DataFrame is also an acceptable value
+    :param hpt_results_filepath: Filepath where the DataFrame, containing the hyperparameter tuning results, is stored.
+        If set to None, those results will not be plotted. Default value: None.
     :param bootstrap: Boolean. If set to True, it computes the confidence intervals of the pareto frontier using the
         bootstrap technique. In this case, the results are in terms of mean and std; otherwise, the results will show
         the real scores obtained by the postprocessed model. Default value: False.
@@ -199,6 +202,20 @@ def pipeline(load_fn,
     fit_color = colors[0]
     test_color = colors[1]
 
+    if hpt_results_filepath is not None:
+        assert os.path.isfile(hpt_results_filepath), 'The provided `hpt_results_filepath` does not exist'
+        with open(hpt_results_filepath, 'rb') as f:
+            hpt_results = pickle.load(f)
+
+        # Filter first 3 models better in accuracy and first 3 better in eod
+        best_acc = hpt_results.T.sort_values(by='test_acc', axis=0, ascending=False).T.iloc[:, :3]
+        best_eod = hpt_results.T.sort_values(by='test_eod', axis=0, ascending=False).T.iloc[:, :3]
+        best_hpt = pd.concat([best_acc, best_eod], axis=1).T.drop_duplicates().T
+        best_acc = best_hpt.iloc[0, :]
+        best_eod = best_hpt.iloc[1, :]
+
+        plt.scatter(best_acc, best_eod, color=test_color, marker='P', s=65, alpha=0.5, edgecolors='black', label=f'hpt_{model_name}')
+
     if not plot_only_test:
         plt.scatter([acc_fit], [eod_fit], color=fit_color, marker='^', edgecolors='black', s=140, label=f'{fit_data} results before unprocessing')
     plt.scatter([acc_test], [eod_test], color=test_color, marker='^', s=140, edgecolors='black', label='test results before unprocessing')
@@ -243,6 +260,9 @@ def pipeline(load_fn,
 
 # Main
 if __name__ == '__main__':
+    print('Executing main pipeline. If you want to use the results of hyperparameter tuning, run the `hp_tuning` '
+          'module first!')
+
     acc_eod_results_df = pd.DataFrame(
         {'metric': ['before_unpr_acc_fit', 'before_unpr_eod_fit', 'before_unpr_acc_test', 'before_unpr_eod_test',
                     'after_unpr_acc_fit', 'after_unpr_eod_fit', 'after_unpr_acc_test', 'after_unpr_eod_test']}
@@ -263,6 +283,7 @@ if __name__ == '__main__':
                                       predict_method_proba_str=model_name_to_predict_proba_str[model_name],
                                       results_filepath=f'results/df_{model_name}_val_{dataset_name}.pkl',
                                       acc_eod_results_df=acc_eod_results_df,
+                                      hpt_results_filepath=f'hpt/{dataset_name}_{model_name}.pkl',
                                       bootstrap=False,
                                       tolerance_ticks=None,
                                       check_model_cache=True,
@@ -284,5 +305,6 @@ if __name__ == '__main__':
             # Clear current figure
             plt.clf()
 
+    acc_eod_results_df.set_index('metric', inplace=True)
     with open('acc_eod_results_df.pkl', 'wb') as f:
         pickle.dump(acc_eod_results_df, f)
