@@ -9,7 +9,7 @@ import optuna
 from optuna.integration import CatBoostPruningCallback
 from folktables import ACSIncome, ACSEmployment, ACSIncomePovertyRatio, ACSMobility
 
-from params import lightgbm_params, fairgbm_params
+from params_models import lightgbm_params, fairgbm_params
 from load_data import load_diabetes_easy_cat, load_diabetes_easy_gbm, load_diabetes_hard_cat, load_diabetes_hard_gbm, \
     load_acs_problem_cat, load_acs_problem_gbm
 

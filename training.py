@@ -14,7 +14,6 @@ from sklearn.metrics import precision_score, accuracy_score, recall_score, f1_sc
 import matplotlib.pyplot as plt
 from folktables import ACSIncome, ACSEmployment, ACSIncomePovertyRatio, ACSMobility
 
-from params import lightgbm_params, fairgbm_params
 from load_data import load_diabetes_easy_cat, load_diabetes_easy_gbm, load_diabetes_hard_cat, load_diabetes_hard_gbm, \
     load_acs_problem_cat, load_acs_problem_gbm, get_splits
 
@@ -33,9 +32,7 @@ pd.set_option('display.max_rows', None)
 np.random.seed(42)
 
 # TODO:
-#  - it seems that FairGBM ignores the categorical features if they are not set in the dataset
 #  - change hpt sampler?
-#  - implement unconstrained models with `error-parity` library
 #  - pareto frontier plots
 
 
@@ -62,17 +59,19 @@ def train_base_lightgbm(data, data_splits, training_params):
 
 
 class LightFairGBM(lgb.LGBMClassifier):
+    cat_cols = None
+
     def fit(self, *args, **kwargs):
-        for el in data['cat_cols']:
-            assert isinstance(el, str)
-        kwargs['categorical_feature'] = data['cat_cols']
+        kwargs['categorical_feature'] = self.cat_cols
         super().fit(*args, **kwargs)
 
 
 def train_fair_lightgbm(data, data_splits, training_params):
     print('--- START LightFairGBM ---')
 
+    # NOTE: impossible to suppress warnings of LightGBM. Example: `[LightGBM] [Warning] Unknown parameter: cat_cols`.
     model = LightFairGBM(verbose=0)
+    training_params.update({'cat_cols': data['cat_cols']})
     model.set_params(**training_params)
 
     estimator = ExponentiatedGradient(
@@ -146,7 +145,6 @@ def train_base_fairgbm(data, data_splits, training_params):
     )
 
     start = time()
-    # TODO: it seems that FairGBM ignores the categorical features if they are not set in the dataset
     fairgbm_clf.fit(data_splits['X_train'], data_splits['y_train'], constraint_group=data_splits['s_train'].to_list(),
                     categorical_feature=data['cat_cols'])
     end = time()
@@ -188,7 +186,7 @@ if __name__ == '__main__':
         'thread_count': -1
     }
 
-    data = load_acs_problem_gbm(ACSEmployment, 'datasets/acsemployment.csv')
+    data = load_diabetes_easy_gbm(None, 'datasets/diabetes_easy.csv')
     data_splits = get_splits(data)
     model, data, y_pred, training_time = train_base_fairgbm(data, data_splits, fairgbm_params)
 

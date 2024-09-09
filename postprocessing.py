@@ -2,22 +2,23 @@ import os
 import pickle
 import warnings
 import functools
+import itertools
+from copy import deepcopy
 
 import numpy as np
-from sklearn.model_selection import train_test_split
+import pandas as pd
 from sklearn.metrics import accuracy_score
-from fairlearn.metrics import equalized_odds_difference, equalized_odds_ratio
+from fairlearn.metrics import equalized_odds_difference
 from error_parity import RelaxedThresholdOptimizer
 from error_parity.pareto_curve import compute_postprocessing_curve
 from error_parity.plotting import plot_postprocessing_frontier
 import matplotlib.pyplot as plt
-from folktables import ACSIncome, ACSEmployment, ACSIncomePovertyRatio, ACSMobility
 
-from params import lightgbm_params, fairgbm_params, catboost_params
-from load_data import load_diabetes_easy_cat, load_diabetes_easy_gbm, load_diabetes_hard_cat, load_diabetes_hard_gbm, \
-    load_acs_problem_cat, load_acs_problem_gbm, get_splits
-from training import LightFairGBM, train_base_lightgbm, train_fair_lightgbm, train_base_catboost, train_fair_catboost, \
-    train_base_fairgbm
+from load_data import get_splits
+from params_pipeline import dataset_names, model_names, dataset_name_to_load_fn, dataset_name_to_problem_class, \
+    model_name_to_predict_proba_str, model_name_to_training_fn, model_name_to_training_params, \
+    model_name_to_colors
+
 
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', message='.*DataFrame is highly fragmented.*')
@@ -26,33 +27,11 @@ warnings.filterwarnings('ignore', message='.*DataFrame is highly fragmented.*')
 np.random.seed(42)
 
 
-def compute_pareto_frontier(unprocessed_clf, tolerance_ticks, data_splits, fit_data, results_filepath, bootstrap,
-                            check_cache=True, save_results=True):
+def compute_pareto_frontier(clf, predict_method_proba_str, tolerance_ticks, data_splits, fit_data, results_filepath,
+                            bootstrap, check_cache=True, save_results=True):
     if check_cache and os.path.isfile(results_filepath):
         with open(results_filepath, 'rb') as f:
             return pickle.load(f)
-
-    data_splits['X_train'].attrs['type'] = 'train'
-    data_splits['X_val'].attrs['type'] = 'val'
-    data_splits['X_test'].attrs['type'] = 'test'
-
-    class RelaxedThresholdOptimizerParetoComputable:
-        def __init__(self, plain_trained_relaxed_threshold_optimizer):
-            self.model = plain_trained_relaxed_threshold_optimizer
-            self.fit_rows = data_splits['X_' + fit_data].head(5)
-
-        def predict(self, X) -> np.ndarray:
-            # TODO: is shuffling happening?
-
-            X_rows = X.head(5)
-            if X_rows.equals(self.fit_rows):
-                group_label = 's_' + fit_data
-            else:
-                group_label = 's_test'
-
-            return self.model(X, group=data_splits[group_label])
-
-    # unprocessed_clf = RelaxedThresholdOptimizerParetoComputable(unprocessed_clf)
 
     if fit_data == 'train':
         X_fit, y_fit, s_fit = data_splits['X_train'], data_splits['y_train'], data_splits['s_train']
@@ -60,8 +39,8 @@ def compute_pareto_frontier(unprocessed_clf, tolerance_ticks, data_splits, fit_d
         X_fit, y_fit, s_fit = data_splits['X_val'], data_splits['y_val'], data_splits['s_val']
 
     postproc_results_df = compute_postprocessing_curve(
-        model=unprocessed_clf,
-        predict_method='predict',
+        model=clf,
+        predict_method=predict_method_proba_str,
         fit_data=(X_fit, y_fit, s_fit),
         eval_data={'test': (data_splits['X_test'], data_splits['y_test'], data_splits['s_test'])},
         fairness_constraint='equalized_odds',
@@ -77,14 +56,20 @@ def compute_pareto_frontier(unprocessed_clf, tolerance_ticks, data_splits, fit_d
     return postproc_results_df
 
 
-def plot_pareto_frontier(results_df, data_splits, data_type, model_name):
+def plot_pareto_frontier(results_df, data_splits, data_type, model_name, color):
+    if data_type in ['train', 'val']:
+        dtype = 'fit'
+    else:
+        dtype = 'test'
+
     plot_postprocessing_frontier(
         results_df,
         perf_metric='accuracy',
         disp_metric='equalized_odds_diff',
-        show_data_type=data_type,
+        show_data_type=dtype,
         model_name=model_name,
         constant_clf_perf=max((data_splits['y_' + data_type] == const_pred).mean() for const_pred in {0, 1}),
+        color=color
     )
 
 
@@ -106,14 +91,16 @@ def pipeline(load_fn,
              predict_method_str,
              predict_method_proba_str,
              results_filepath,
-             bootstrap,
+             acc_eod_results_df,
+             bootstrap=False,
              tolerance_ticks=None,
              check_model_cache=True,
              training_fn=None,
              training_params=None,
              check_results_cache=True,
              save_results=True,
-             img_size=(10, 10)) -> None:
+             colors=('blue', 'green'),
+             plot_only_test=True) -> pd.DataFrame:
     """
     Main function of our project.
     First, it trains a specific model by using the `training_fn` parameter, then it computes the pareto frontier of said
@@ -135,13 +122,16 @@ def pipeline(load_fn,
     :param predict_method_proba_str: A string. Exact name of the model class method for predicting the labels'
         probabilities.
     :param results_filepath: Filepath where the DataFrame containing the pareto frontier results will be saved.
+    :param acc_eod_results_df: DataFrame that contains the accuracy and equalized odds difference metrics of previous
+        calculated methods. It will be updated during the execution of this function. It saves those metrics for fit
+        and test sets, before and after unprocessing. A empty DataFrame is also an acceptable value
     :param bootstrap: Boolean. If set to True, it computes the confidence intervals of the pareto frontier using the
         bootstrap technique. In this case, the results are in terms of mean and std; otherwise, the results will show
-        the real scores obtained by the postprocessed model.
+        the real scores obtained by the postprocessed model. Default value: False.
     :param tolerance_ticks: List of tolerance floating values of the equalized odds difference. The values should lay
         in the interval [0.0, 1.0]. Default value: None. If None, the postprocessing method will be calculated for the
         following tolerances: [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14,
-        0.15, 0.16, 0.17, 0.18, 0.19, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9].
+        0.15, 0.16, 0.17, 0.18, 0.19, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0].
     :param check_model_cache: Boolean. If set to True, the function will try to load the provided model; otherwise,
         it will train the model from scratch. Default value: True.
     :param training_fn: Function responsible for training the base model (i.e., before postprocessing). Pick one from
@@ -151,13 +141,16 @@ def pipeline(load_fn,
         it will calculate the pareto frontier. Default value: True.
     :param save_results: Boolean. If set to True, it saves the results DataFrame of the pareto frontier. Default value:
         True.
-    :param img_size: Tuple of two integers. Size of the plots.
-    :return: None. This function does not return any data.
+    :param colors: Tuple of two strings. First one is the fit color, second one is the test color. Default value:
+        ('blue', 'green').
+    :param plot_only_test: Boolean. If set to True, it plots the pareto frontier with respect to the test set only.
+        Default value: True.
+    :return: A Pandas DataFrame. It returns the updated `acc_eod_results_df`.
     """
 
     if tolerance_ticks is None or tolerance_ticks == 'default':
         tolerance_ticks = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14,
-                           0.15, 0.16, 0.17, 0.18, 0.19, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+                           0.15, 0.16, 0.17, 0.18, 0.19, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     else:
         assert isinstance(tolerance_ticks, list)
 
@@ -201,9 +194,14 @@ def pipeline(load_fn,
                                         data_splits['s_' + fit_data])
     acc_test, eod_test = eval_acc_and_eod(_predict, data_splits['X_test'], data_splits['y_test'],
                                           data_splits['s_test'])
-    plt.figure(figsize=img_size)
-    plt.scatter([acc_fit], [eod_fit], color='blue', marker='+', s=20, label=f'{fit_data} results before unprocessing')
-    plt.scatter([acc_test], [eod_test], color='green', marker='+', s=20, label='test results before unprocessing')
+    _curr_acc_eod_res = [acc_fit, eod_fit, acc_test, eod_test]
+
+    fit_color = colors[0]
+    test_color = colors[1]
+
+    if not plot_only_test:
+        plt.scatter([acc_fit], [eod_fit], color=fit_color, marker='^', edgecolors='black', s=140, label=f'{fit_data} results before unprocessing')
+    plt.scatter([acc_test], [eod_test], color=test_color, marker='^', s=140, edgecolors='black', label='test results before unprocessing')
     print(f'FIT results before unprocessing: acc: {acc_fit:.4f} - eod: {eod_fit:.4f}')
     print(f'TEST results before unprocessing: acc: {acc_test:.4f} - eod: {eod_test:.4f}')
 
@@ -223,47 +221,68 @@ def pipeline(load_fn,
                                         data_splits['y_' + fit_data], data_splits['s_' + fit_data])
     acc_test, eod_test = eval_acc_and_eod(_predict_test_after_unprocessing, data_splits['X_test'], data_splits['y_test'],
                                           data_splits['s_test'])
-    plt.scatter([acc_fit], [eod_fit], color='blue', marker='*', s=20, label=f'{fit_data} results after unprocessing')
-    plt.scatter([acc_test], [eod_test], color='green', marker='*', s=20, label=f'test results after unprocessing')
+    acc_eod_results_df[f'{dataset_name}_{model_name}'] = _curr_acc_eod_res + [acc_fit, eod_fit, acc_test, eod_test]
+
+    if not plot_only_test:
+        plt.scatter([acc_fit], [eod_fit], color=fit_color, marker='*', edgecolors='black', s=200, label=f'{fit_data} results after unprocessing')
+    plt.scatter([acc_test], [eod_test], color=test_color, marker='*', edgecolors='black', s=200, label=f'test results after unprocessing')
     print(f'FIT results after unprocessing: acc: {acc_fit:.4f} - eod: {eod_fit:.4f}')
     print(f'TEST results after unprocessing: acc: {acc_test:.4f} - eod: {eod_test:.4f}')
 
-    results_df = compute_pareto_frontier(unprocessed_clf, tolerance_ticks, data_splits, fit_data,
-                                         results_filepath, bootstrap, check_cache=check_results_cache,
+    results_df = compute_pareto_frontier(model, predict_method_proba_str, tolerance_ticks, data_splits,
+                                         fit_data, results_filepath, bootstrap, check_cache=check_results_cache,
                                          save_results=save_results)
 
-    plot_pareto_frontier(results_df, data_splits, fit_data, model_name)
-    plot_pareto_frontier(results_df, data_splits, 'test', model_name)
-
-    plt.xlabel(r"accuracy $\rightarrow$")
-    plt.ylabel(r"equalized odds diff tolerance $\leftarrow$")
-
-    # Assuming `dataset_filepath` has the format 'datasets/<dataset_name>.csv', see above asserts
-    plt.savefig(f'plots/{model_name}_{fit_data}_{dataset_name}.png')
-    plt.show()
-
-    # Clear current figure
-    plt.clf()
+    if not plot_only_test:
+        plot_pareto_frontier(results_df, data_splits, fit_data, model_name, color=fit_color)
+    plot_pareto_frontier(results_df, data_splits, 'test', model_name, color=test_color)
 
     print('\n---\n')
+    return acc_eod_results_df
 
 
 # Main
 if __name__ == '__main__':
-    pipeline(load_diabetes_easy_gbm,
-             None,
-             'datasets/diabetes_easy.csv',
-             'train',
-             'models/lightgbm_diabetes_easy.pkl',
-             'lightgbm',
-             'predict',
-             'predict_proba',
-             'results/df_lightgbm_diabetes_easy.pkl',
-             False,
-             tolerance_ticks=[0.1],
-             check_model_cache=True,
-             training_fn=train_base_lightgbm,
-             training_params=lightgbm_params,
-             check_results_cache=True,
-             save_results=True,
-             img_size=(10, 10))
+    acc_eod_results_df = pd.DataFrame(
+        {'metric': ['before_unpr_acc_fit', 'before_unpr_eod_fit', 'before_unpr_acc_test', 'before_unpr_eod_test',
+                    'after_unpr_acc_fit', 'after_unpr_eod_fit', 'after_unpr_acc_test', 'after_unpr_eod_test']}
+    )
+
+    for dataset_name, model_name in itertools.product(dataset_names, model_names):
+        if model_name == 'lightgbm':
+            plt.figure(figsize=(10, 10))
+            plt.title(f'Dataset: {dataset_name} - test')
+
+        acc_eod_results_df = pipeline(load_fn=dataset_name_to_load_fn[dataset_name],
+                                      problem_class=dataset_name_to_problem_class[dataset_name],
+                                      dataset_filepath=f'datasets/{dataset_name}.csv',
+                                      fit_data='val',
+                                      model_filepath=f'models/{model_name}_val_{dataset_name}.pkl',
+                                      model_name=model_name,
+                                      predict_method_str='predict',
+                                      predict_method_proba_str=model_name_to_predict_proba_str[model_name],
+                                      results_filepath=f'results/df_{model_name}_val_{dataset_name}.pkl',
+                                      acc_eod_results_df=acc_eod_results_df,
+                                      bootstrap=False,
+                                      tolerance_ticks=None,
+                                      check_model_cache=True,
+                                      training_fn=model_name_to_training_fn[model_name],
+                                      training_params=deepcopy(model_name_to_training_params[model_name]),
+                                      check_results_cache=True,
+                                      save_results=True,
+                                      colors=model_name_to_colors[model_name],
+                                      plot_only_test=True)
+
+        if model_name == 'catfairboost':
+            plt.xlabel(r"accuracy $\rightarrow$")
+            plt.ylabel(r"equalized odds diff tolerance $\leftarrow$")
+
+            # Assuming `dataset_filepath` has the format 'datasets/<dataset_name>.csv'
+            plt.savefig(f'plots/val_{dataset_name}.png')
+            plt.show()
+
+            # Clear current figure
+            plt.clf()
+
+    with open('acc_eod_results_df.pkl', 'wb') as f:
+        pickle.dump(acc_eod_results_df, f)
