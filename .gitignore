@@ -2,3 +2,7 @@ catboost_info
 data
 datasets
 models
+hpt
+hpt_best_models
+plots
+results

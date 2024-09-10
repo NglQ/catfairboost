@@ -21,7 +21,7 @@ from load_data import get_splits
 from training import LightFairGBM
 from params_pipeline import dataset_names, model_names, dataset_name_to_load_fn, dataset_name_to_problem_class
 
-warnings.filterwarnings('ignore', category=FutureWarning, message='.*ECOS will no longer be installed by default with CVXPY.*')
+warnings.filterwarnings('ignore', category=FutureWarning)
 
 np.random.seed(42)
 
@@ -111,10 +111,10 @@ def hpt_lightgbm(data) -> tuple[pd.DataFrame, lgb.LGBMClassifier]:
             best_val_unpr_acc = val_unpr_accuracy
             best_model = model
 
-        print(colored(f'Test accuracy: {test_accuracy}', 'purple'))
-        print(colored(f'Test equalized odds diff: {test_eod}', 'purple'))
-        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'purple'))
-        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'purple'))
+        print(colored(f'Test accuracy: {test_accuracy}', 'magenta'))
+        print(colored(f'Test equalized odds diff: {test_eod}', 'magenta'))
+        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'magenta'))
+        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'magenta'))
 
         return val_accuracy
 
@@ -122,8 +122,8 @@ def hpt_lightgbm(data) -> tuple[pd.DataFrame, lgb.LGBMClassifier]:
     study = optuna.create_study(sampler=sampler, direction='maximize')
     study.optimize(objective, n_trials=50, show_progress_bar=True)
 
-    print(colored(f'Number of finished trials: {len(study.trials)}', 'pink'))
-    print(colored(f'Best trial: {study.best_trial.params}', 'pink'))
+    print(colored(f'Number of finished trials: {len(study.trials)}', 'cyan'))
+    print(colored(f'Best trial: {study.best_trial.params}', 'cyan'))
     return results, best_model
 
 
@@ -218,10 +218,10 @@ def hpt_lightfairgbm(data) -> tuple[pd.DataFrame, ExponentiatedGradient]:
             best_val_unpr_acc = val_unpr_accuracy
             best_model = model
 
-        print(colored(f'Test accuracy: {test_accuracy}', 'purple'))
-        print(colored(f'Test equalized odds diff: {test_eod}', 'purple'))
-        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'purple'))
-        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'purple'))
+        print(colored(f'Test accuracy: {test_accuracy}', 'magenta'))
+        print(colored(f'Test equalized odds diff: {test_eod}', 'magenta'))
+        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'magenta'))
+        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'magenta'))
 
         return val_accuracy
 
@@ -229,8 +229,8 @@ def hpt_lightfairgbm(data) -> tuple[pd.DataFrame, ExponentiatedGradient]:
     study = optuna.create_study(sampler=sampler, direction='maximize')
     study.optimize(objective, n_trials=50, show_progress_bar=True)
 
-    print(colored(f'Number of finished trials: {len(study.trials)}', 'pink'))
-    print(colored(f'Best trial: {study.best_trial.params}', 'pink'))
+    print(colored(f'Number of finished trials: {len(study.trials)}', 'cyan'))
+    print(colored(f'Best trial: {study.best_trial.params}', 'cyan'))
     return results, best_model
 
 
@@ -324,10 +324,10 @@ def hpt_fairgbm(data) -> tuple[pd.DataFrame, FairGBMClassifier]:
             best_val_unpr_acc = val_unpr_accuracy
             best_model = model
 
-        print(colored(f'Test accuracy: {test_accuracy}', 'purple'))
-        print(colored(f'Test equalized odds diff: {test_eod}', 'purple'))
-        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'purple'))
-        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'purple'))
+        print(colored(f'Test accuracy: {test_accuracy}', 'magenta'))
+        print(colored(f'Test equalized odds diff: {test_eod}', 'magenta'))
+        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'magenta'))
+        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'magenta'))
 
         return max(0, val_accuracy - val_eod)
 
@@ -335,8 +335,8 @@ def hpt_fairgbm(data) -> tuple[pd.DataFrame, FairGBMClassifier]:
     study = optuna.create_study(sampler=sampler, direction='maximize')
     study.optimize(objective, n_trials=50, show_progress_bar=True)
 
-    print(colored(f'Number of finished trials: {len(study.trials)}', 'pink'))
-    print(colored(f'Best trial: {study.best_trial.params}', 'pink'))
+    print(colored(f'Number of finished trials: {len(study.trials)}', 'cyan'))
+    print(colored(f'Best trial: {study.best_trial.params}', 'cyan'))
     return results, best_model
 
 
@@ -399,10 +399,10 @@ def hpt_catboost(data) -> tuple[pd.DataFrame, cb.CatBoostClassifier]:
             best_val_unpr_acc = val_unpr_accuracy
             best_model = model
 
-        print(colored(f'Test accuracy: {test_accuracy}', 'purple'))
-        print(colored(f'Test equalized odds diff: {test_eod}', 'purple'))
-        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'purple'))
-        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'purple'))
+        print(colored(f'Test accuracy: {test_accuracy}', 'magenta'))
+        print(colored(f'Test equalized odds diff: {test_eod}', 'magenta'))
+        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'magenta'))
+        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'magenta'))
 
         return val_accuracy
 
@@ -410,8 +410,8 @@ def hpt_catboost(data) -> tuple[pd.DataFrame, cb.CatBoostClassifier]:
     study = optuna.create_study(sampler=sampler, direction='maximize')
     study.optimize(objective, n_trials=50, show_progress_bar=True)
 
-    print(colored(f'Number of finished trials: {len(study.trials)}', 'pink'))
-    print(colored(f'Best trial: {study.best_trial.params}', 'pink'))
+    print(colored(f'Number of finished trials: {len(study.trials)}', 'cyan'))
+    print(colored(f'Best trial: {study.best_trial.params}', 'cyan'))
     return results, best_model
 
 
@@ -483,10 +483,10 @@ def hpt_catfairboost(data) -> tuple[pd.DataFrame, ExponentiatedGradient]:
             best_val_unpr_acc = val_unpr_accuracy
             best_model = model
 
-        print(colored(f'Test accuracy: {test_accuracy}', 'purple'))
-        print(colored(f'Test equalized odds diff: {test_eod}', 'purple'))
-        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'purple'))
-        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'purple'))
+        print(colored(f'Test accuracy: {test_accuracy}', 'magenta'))
+        print(colored(f'Test equalized odds diff: {test_eod}', 'magenta'))
+        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'magenta'))
+        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'magenta'))
 
         return val_accuracy
 
@@ -494,8 +494,8 @@ def hpt_catfairboost(data) -> tuple[pd.DataFrame, ExponentiatedGradient]:
     study = optuna.create_study(sampler=sampler, direction='maximize')
     study.optimize(objective, n_trials=50, show_progress_bar=True)
 
-    print(colored(f'Number of finished trials: {len(study.trials)}', 'pink'))
-    print(colored(f'Best trial: {study.best_trial.params}', 'pink'))
+    print(colored(f'Number of finished trials: {len(study.trials)}', 'cyan'))
+    print(colored(f'Best trial: {study.best_trial.params}', 'cyan'))
     return results, best_model
 
 

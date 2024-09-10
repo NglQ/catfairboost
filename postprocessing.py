@@ -182,6 +182,7 @@ def pipeline(load_fn,
     if check_model_cache and os.path.isfile(model_filepath):
         with open(model_filepath, 'rb') as f:
             model = pickle.load(f)
+        print(colored('Successfully loaded model!', 'green'))
     else:
         assert training_params is not None and training_fn is not None, ('If no model can be loaded, you need to '
                                                                          'provide the `training_params` and '
@@ -265,6 +266,7 @@ def pipeline(load_fn,
 if __name__ == '__main__':
     use_hpt_data = True
     fit_data = 'val'
+    show_plots = False
 
     if use_hpt_data:
         print(colored('Executing main pipeline. If you want to use the results of hyperparameter tuning, run the '
@@ -317,7 +319,8 @@ if __name__ == '__main__':
 
             # Assuming `dataset_filepath` has the format 'datasets/<dataset_name>.csv'
             plt.savefig(f'plots/val_{dataset_name}.png')
-            plt.show()
+            if show_plots:
+                plt.show()
 
             # Clear current figure
             plt.clf()
