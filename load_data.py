@@ -115,9 +115,11 @@ def convert_to_gbm_datasets(data):
         X_test[cat] = label_encoders[cat].transform(X_test[cat])
 
     train_data = lgb.Dataset(X_train, label=y_train, feature_name=list(X_train.columns),
-                             categorical_feature=categorical_columns, free_raw_data=False).construct()
+                             categorical_feature=categorical_columns, free_raw_data=False,
+                             params={'verbosity': -1}).construct()
     test_data = lgb.Dataset(X_test, label=y_test, feature_name=list(X_test.columns),
-                            categorical_feature=categorical_columns, free_raw_data=False).construct()
+                            categorical_feature=categorical_columns, free_raw_data=False,
+                            params={'verbosity': -1}).construct()
 
     data['train'] = train_data
     data['test'] = test_data

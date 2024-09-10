@@ -1,4 +1,6 @@
 import os
+import threading
+import signal
 import pickle
 import itertools
 import warnings
@@ -22,8 +24,19 @@ from training import LightFairGBM
 from params_pipeline import dataset_names, model_names, dataset_name_to_load_fn, dataset_name_to_problem_class
 
 warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=UserWarning, message='Using categorical_feature in Dataset.')
 
 np.random.seed(42)
+
+
+def stop_trial(trial, ppid):
+    trial.should_prune = True
+    print(colored(f'Stopping trial {trial.number}...', 'red'))
+    os.kill(ppid, signal.SIGUSR1)
+
+
+def signal_handler(signum, frame):
+    raise TimeoutError(colored('STOPPED, time budget expired!', 'red'))
 
 
 def hpt_lightgbm(data) -> tuple[pd.DataFrame, lgb.LGBMClassifier]:
@@ -81,7 +94,7 @@ def hpt_lightgbm(data) -> tuple[pd.DataFrame, lgb.LGBMClassifier]:
         training_params = deepcopy(lightgbm_params)
         training_params.update(params)
 
-        model = lgb.LGBMClassifier(verbose=0)
+        model = lgb.LGBMClassifier(verbosity=-1)
         model.set_params(**training_params)
 
         model.fit(data_splits['X_train'], data_splits['y_train'], categorical_feature=data['cat_cols'])
@@ -182,8 +195,7 @@ def hpt_lightfairgbm(data) -> tuple[pd.DataFrame, ExponentiatedGradient]:
         training_params = deepcopy(lightgbm_params)
         training_params.update(params)
 
-        # NOTE: impossible to suppress warnings of LightGBM. Example: `[LightGBM] [Warning] Unknown parameter: cat_cols`.
-        internal_model = LightFairGBM(verbose=0)
+        internal_model = LightFairGBM(verbosity=-1)
         training_params.update({'cat_cols': data['cat_cols']})
         internal_model.set_params(**training_params)
 
@@ -191,37 +203,49 @@ def hpt_lightfairgbm(data) -> tuple[pd.DataFrame, ExponentiatedGradient]:
             estimator=internal_model,
             constraints=EqualizedOdds()
         )
-        model.fit(data_splits['X_train'], data_splits['y_train'], sensitive_features=data_splits['s_train'])
 
-        y_pred = model.predict(data_splits['X_val'])
+        signal.signal(signal.SIGUSR1, signal_handler)
+        timer = threading.Timer(time_budget, lambda: stop_trial(trial, os.getpid()))
+        timer.start()
+        val_accuracy = 0.0
+        try:
+            model.fit(data_splits['X_train'], data_splits['y_train'], sensitive_features=data_splits['s_train'])
 
-        val_accuracy = accuracy_score(data_splits['y_val'], y_pred)
+            y_pred = model.predict(data_splits['X_val'])
 
-        # --- test results not used in the hyperparameter tuning ---
-        y_pred = model.predict(data_splits['X_test'])
-        test_accuracy = accuracy_score(data_splits['y_test'], y_pred)
-        test_eod = equalized_odds_difference(data_splits['y_test'], y_pred, sensitive_features=data_splits['s_test'])
+            val_accuracy = accuracy_score(data_splits['y_val'], y_pred)
 
-        # --- unprocess model
-        unprocessed_clf = RelaxedThresholdOptimizer(
-            predictor=lambda X: model._pmf_predict(X)[:, -1],
-            constraint='equalized_odds',
-            tolerance=1.0
-        )
-        unprocessed_clf.fit(X=data_splits['X_val'], y=data_splits['y_val'], group=data_splits['s_val'])
-        y_pred = unprocessed_clf.predict(data_splits['X_val'], group=data_splits['s_val'])
-        val_unpr_accuracy = accuracy_score(data_splits['y_val'], y_pred)
-        val_unpr_eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
-        results[str(params)] = [test_accuracy, test_eod, val_unpr_accuracy, val_unpr_eod]
-        if val_unpr_accuracy > best_val_unpr_acc:
-            print(colored('Found a better unprocessed classifier!', 'green'))
-            best_val_unpr_acc = val_unpr_accuracy
-            best_model = model
+            # --- test results not used in the hyperparameter tuning ---
+            y_pred = model.predict(data_splits['X_test'])
+            test_accuracy = accuracy_score(data_splits['y_test'], y_pred)
+            test_eod = equalized_odds_difference(data_splits['y_test'], y_pred, sensitive_features=data_splits['s_test'])
 
-        print(colored(f'Test accuracy: {test_accuracy}', 'magenta'))
-        print(colored(f'Test equalized odds diff: {test_eod}', 'magenta'))
-        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'magenta'))
-        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'magenta'))
+            # --- unprocess model
+            unprocessed_clf = RelaxedThresholdOptimizer(
+                predictor=lambda X: model._pmf_predict(X)[:, -1],
+                constraint='equalized_odds',
+                tolerance=1.0
+            )
+            unprocessed_clf.fit(X=data_splits['X_val'], y=data_splits['y_val'], group=data_splits['s_val'])
+            y_pred = unprocessed_clf.predict(data_splits['X_val'], group=data_splits['s_val'])
+            val_unpr_accuracy = accuracy_score(data_splits['y_val'], y_pred)
+            val_unpr_eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
+            results[str(params)] = [test_accuracy, test_eod, val_unpr_accuracy, val_unpr_eod]
+            if val_unpr_accuracy > best_val_unpr_acc:
+                print(colored('Found a better unprocessed classifier!', 'green'))
+                best_val_unpr_acc = val_unpr_accuracy
+                best_model = model
+
+            print(colored(f'Test accuracy: {test_accuracy}', 'magenta'))
+            print(colored(f'Test equalized odds diff: {test_eod}', 'magenta'))
+            print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'magenta'))
+            print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'magenta'))
+
+        except TimeoutError as err:
+            print(err)
+
+        finally:
+            timer.cancel()
 
         return val_accuracy
 
@@ -456,37 +480,52 @@ def hpt_catfairboost(data) -> tuple[pd.DataFrame, ExponentiatedGradient]:
             estimator=internal_model,
             constraints=EqualizedOdds()
         )
-        model.fit(data_splits['X_train'], data_splits['y_train'], sensitive_features=data_splits['s_train'])
 
-        y_pred = model.predict(data_splits['X_val'])
+        signal.signal(signal.SIGUSR1, signal_handler)
+        timer = threading.Timer(time_budget, lambda: stop_trial(trial, os.getpid()))
+        timer.start()
+        val_accuracy = 0.0
+        try:
+            model.fit(data_splits['X_train'], data_splits['y_train'], sensitive_features=data_splits['s_train'])
 
-        val_accuracy = accuracy_score(data_splits['y_val'], y_pred)
+            y_pred = model.predict(data_splits['X_val'])
 
-        # --- test results not used in the hyperparameter tuning ---
-        y_pred = model.predict(data_splits['X_test'])
-        test_accuracy = accuracy_score(data_splits['y_test'], y_pred)
-        test_eod = equalized_odds_difference(data_splits['y_test'], y_pred, sensitive_features=data_splits['s_test'])
+            val_accuracy = accuracy_score(data_splits['y_val'], y_pred)
 
-        # --- unprocess model
-        unprocessed_clf = RelaxedThresholdOptimizer(
-            predictor=lambda X: model._pmf_predict(X)[:, -1],
-            constraint='equalized_odds',
-            tolerance=1.0
-        )
-        unprocessed_clf.fit(X=data_splits['X_val'], y=data_splits['y_val'], group=data_splits['s_val'])
-        y_pred = unprocessed_clf.predict(data_splits['X_val'], group=data_splits['s_val'])
-        val_unpr_accuracy = accuracy_score(data_splits['y_val'], y_pred)
-        val_unpr_eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
-        results[str(param)] = [test_accuracy, test_eod, val_unpr_accuracy, val_unpr_eod]
-        if val_unpr_accuracy > best_val_unpr_acc:
-            print(colored('Found a better unprocessed classifier!', 'green'))
-            best_val_unpr_acc = val_unpr_accuracy
-            best_model = model
+            # --- test results not used in the hyperparameter tuning ---
+            y_pred = model.predict(data_splits['X_test'])
+            test_accuracy = accuracy_score(data_splits['y_test'], y_pred)
+            test_eod = equalized_odds_difference(data_splits['y_test'], y_pred, sensitive_features=data_splits['s_test'])
 
-        print(colored(f'Test accuracy: {test_accuracy}', 'magenta'))
-        print(colored(f'Test equalized odds diff: {test_eod}', 'magenta'))
-        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'magenta'))
-        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'magenta'))
+            # --- unprocess model
+            unprocessed_clf = RelaxedThresholdOptimizer(
+                predictor=lambda X: model._pmf_predict(X)[:, -1],
+                constraint='equalized_odds',
+                tolerance=1.0
+            )
+            unprocessed_clf.fit(X=data_splits['X_val'], y=data_splits['y_val'], group=data_splits['s_val'])
+            y_pred = unprocessed_clf.predict(data_splits['X_val'], group=data_splits['s_val'])
+            val_unpr_accuracy = accuracy_score(data_splits['y_val'], y_pred)
+            val_unpr_eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
+            results[str(param)] = [test_accuracy, test_eod, val_unpr_accuracy, val_unpr_eod]
+            if val_unpr_accuracy > best_val_unpr_acc:
+                print(colored('Found a better unprocessed classifier!', 'green'))
+                best_val_unpr_acc = val_unpr_accuracy
+                best_model = model
+
+            print(colored(f'Test accuracy: {test_accuracy}', 'magenta'))
+            print(colored(f'Test equalized odds diff: {test_eod}', 'magenta'))
+            print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'magenta'))
+            print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'magenta'))
+
+        # It's necessary to include the `KeyboardInterrupt` exception for CatFairBoost. This is because CatBoost,
+        # in its internal libraries, could convert the TimeoutError into a KeyboardInterrupt exception.
+        # Downsides: the code is not stoppable with CTRL+C anymore inside CatFairBoost hyperparameter tuning.
+        except (TimeoutError, KeyboardInterrupt) as err:
+            print(err)
+
+        finally:
+            timer.cancel()
 
         return val_accuracy
 
@@ -500,6 +539,9 @@ def hpt_catfairboost(data) -> tuple[pd.DataFrame, ExponentiatedGradient]:
 
 
 if __name__ == '__main__':
+    # 7 minutes time budget for lightfairgbm and catfairboost; otherwise, infinite time
+    time_budget = 7 * 60
+
     model_name_to_hpt_fn = {'lightgbm': hpt_lightgbm,
                             'lightfairgbm': hpt_lightfairgbm,
                             'fairgbm': hpt_fairgbm,
@@ -510,7 +552,11 @@ if __name__ == '__main__':
     os.makedirs('hpt_best_models', exist_ok=True)
     os.makedirs('datasets', exist_ok=True)
 
-    print('Hyperparameter tuning of our algos using random search')
+    print(colored('Hyperparameter tuning of our selected algorithms using random search.', 'green',
+                  attrs=['bold']))
+    print(colored('If you want to stop the code, it could happen that CTRL+C does not work (the feature has been '
+                  'disabled during CatFairBoost tuning because of the inner workings of the CatBoost library); '
+                  'if that is the case, you need to send a SIGTERM(15) signal or close the terminal.','red'))
 
     for dataset_name, model_name in itertools.product(dataset_names, model_names):
         print(f'\n --- Dataset: {dataset_name} - Model: {model_name} ---\n')
