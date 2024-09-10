@@ -3,6 +3,7 @@ import pickle
 import warnings
 import functools
 import itertools
+import time
 from copy import deepcopy
 
 import numpy as np
@@ -13,6 +14,7 @@ from error_parity import RelaxedThresholdOptimizer
 from error_parity.pareto_curve import compute_postprocessing_curve
 from error_parity.plotting import plot_postprocessing_frontier
 import matplotlib.pyplot as plt
+from termcolor import colored
 
 from load_data import get_splits
 from params_pipeline import dataset_names, model_names, dataset_name_to_load_fn, dataset_name_to_problem_class, \
@@ -203,7 +205,8 @@ def pipeline(load_fn,
     test_color = colors[1]
 
     if hpt_results_filepath is not None:
-        assert os.path.isfile(hpt_results_filepath), 'The provided `hpt_results_filepath` does not exist'
+        assert os.path.isfile(hpt_results_filepath), ('The provided `hpt_results_filepath` does not exist. Run the '
+                                                      '`hp_tuning` module first!')
         with open(hpt_results_filepath, 'rb') as f:
             hpt_results = pickle.load(f)
 
@@ -260,8 +263,13 @@ def pipeline(load_fn,
 
 # Main
 if __name__ == '__main__':
-    print('Executing main pipeline. If you want to use the results of hyperparameter tuning, run the `hp_tuning` '
-          'module first!')
+    use_hpt_data = True
+    fit_data = 'val'
+
+    if use_hpt_data:
+        print(colored('Executing main pipeline. If you want to use the results of hyperparameter tuning, run the '
+                      '`hp_tuning` module first!', 'red'))
+        time.sleep(5)
 
     acc_eod_results_df = pd.DataFrame(
         {'metric': ['before_unpr_acc_fit', 'before_unpr_eod_fit', 'before_unpr_acc_test', 'before_unpr_eod_test',
@@ -269,6 +277,15 @@ if __name__ == '__main__':
     )
 
     for dataset_name, model_name in itertools.product(dataset_names, model_names):
+        if use_hpt_data:
+            model_filepath = f'hpt_best_models/{dataset_name}_{model_name}.pkl'
+            hpt_results_filepath = f'hpt/{dataset_name}_{model_name}.pkl'
+        else:
+            # Try to load a non-optimal model pre-computed by the pipeline.
+            # NOTE: this will succeed if at least once the pipeline has been executed with `use_hpt_data` set to False
+            model_filepath = f'models/{model_name}_{dataset_name}_{fit_data}.pkl'
+            hpt_results_filepath = None
+
         if model_name == 'lightgbm':
             plt.figure(figsize=(10, 10))
             plt.title(f'Dataset: {dataset_name} - test')
@@ -276,14 +293,14 @@ if __name__ == '__main__':
         acc_eod_results_df = pipeline(load_fn=dataset_name_to_load_fn[dataset_name],
                                       problem_class=dataset_name_to_problem_class[dataset_name],
                                       dataset_filepath=f'datasets/{dataset_name}.csv',
-                                      fit_data='val',
-                                      model_filepath=f'models/{model_name}_val_{dataset_name}.pkl',
+                                      fit_data=fit_data,
+                                      model_filepath=model_filepath,
                                       model_name=model_name,
                                       predict_method_str='predict',
                                       predict_method_proba_str=model_name_to_predict_proba_str[model_name],
-                                      results_filepath=f'results/df_{model_name}_val_{dataset_name}.pkl',
+                                      results_filepath=f'results/df_{model_name}_{dataset_name}_{fit_data}.pkl',
                                       acc_eod_results_df=acc_eod_results_df,
-                                      hpt_results_filepath=f'hpt/{dataset_name}_{model_name}.pkl',
+                                      hpt_results_filepath=hpt_results_filepath,
                                       bootstrap=False,
                                       tolerance_ticks=None,
                                       check_model_cache=True,

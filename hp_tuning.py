@@ -1,6 +1,7 @@
 import os
 import pickle
 import itertools
+import warnings
 from copy import deepcopy
 
 import numpy as np
@@ -11,23 +12,30 @@ from fairlearn.reductions import ExponentiatedGradient, EqualizedOdds
 import lightgbm as lgb
 import catboost as cb
 from fairgbm import FairGBMClassifier
+from error_parity import RelaxedThresholdOptimizer
 import optuna
+from termcolor import colored
 
 from params_models import lightgbm_params, fairgbm_params
 from load_data import get_splits
 from training import LightFairGBM
 from params_pipeline import dataset_names, model_names, dataset_name_to_load_fn, dataset_name_to_problem_class
 
+warnings.filterwarnings('ignore', category=FutureWarning, message='.*ECOS will no longer be installed by default with CVXPY.*')
 
 np.random.seed(42)
 
 
-def hpt_lightgbm(data) -> pd.DataFrame:
+def hpt_lightgbm(data) -> tuple[pd.DataFrame, lgb.LGBMClassifier]:
     data_splits = get_splits(data)
     results = pd.DataFrame()
-    results['metric'] = ['test_acc', 'test_eod']
+    results['metric'] = ['test_acc', 'test_eod', 'val_unpr_acc', 'val_unpr_eod']
+    best_model: lgb.LGBMClassifier = None
+    best_val_unpr_acc = float('-inf')
 
     def objective(trial):
+        nonlocal best_model, best_val_unpr_acc
+
         enable_bagging = trial.suggest_categorical('enable_bagging', [True, False])
         if enable_bagging:
             bagging_freq = trial.suggest_int('bagging_freq', 1, 30)
@@ -86,10 +94,27 @@ def hpt_lightgbm(data) -> pd.DataFrame:
         y_pred = model.predict(data_splits['X_test'])
         test_accuracy = accuracy_score(data_splits['y_test'], y_pred)
         test_eod = equalized_odds_difference(data_splits['y_test'], y_pred, sensitive_features=data_splits['s_test'])
-        results[str(params)] = [test_accuracy, test_eod]
 
-        print('Test accuracy: ', test_accuracy)
-        print('Test equalized odds diff: ', test_eod)
+        # --- unprocess model
+        unprocessed_clf = RelaxedThresholdOptimizer(
+            predictor=lambda X: model.predict_proba(X)[:, -1],
+            constraint='equalized_odds',
+            tolerance=1.0
+        )
+        unprocessed_clf.fit(X=data_splits['X_val'], y=data_splits['y_val'], group=data_splits['s_val'])
+        y_pred = unprocessed_clf.predict(data_splits['X_val'], group=data_splits['s_val'])
+        val_unpr_accuracy = accuracy_score(data_splits['y_val'], y_pred)
+        val_unpr_eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
+        results[str(params)] = [test_accuracy, test_eod, val_unpr_accuracy, val_unpr_eod]
+        if val_unpr_accuracy > best_val_unpr_acc:
+            print(colored('Found a better unprocessed classifier!', 'green'))
+            best_val_unpr_acc = val_unpr_accuracy
+            best_model = model
+
+        print(colored(f'Test accuracy: {test_accuracy}', 'purple'))
+        print(colored(f'Test equalized odds diff: {test_eod}', 'purple'))
+        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'purple'))
+        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'purple'))
 
         return val_accuracy
 
@@ -97,17 +122,21 @@ def hpt_lightgbm(data) -> pd.DataFrame:
     study = optuna.create_study(sampler=sampler, direction='maximize')
     study.optimize(objective, n_trials=50, show_progress_bar=True)
 
-    print('Number of finished trials:', len(study.trials))
-    print('Best trial:', study.best_trial.params)
-    return results
+    print(colored(f'Number of finished trials: {len(study.trials)}', 'pink'))
+    print(colored(f'Best trial: {study.best_trial.params}', 'pink'))
+    return results, best_model
 
 
-def hpt_lightfairgbm(data) -> pd.DataFrame:
+def hpt_lightfairgbm(data) -> tuple[pd.DataFrame, ExponentiatedGradient]:
     data_splits = get_splits(data)
     results = pd.DataFrame()
-    results['metric'] = ['test_acc', 'test_eod']
+    results['metric'] = ['test_acc', 'test_eod', 'val_unpr_acc', 'val_unpr_eod']
+    best_model: ExponentiatedGradient = None
+    best_val_unpr_acc = float('-inf')
 
     def objective(trial):
+        nonlocal best_model, best_val_unpr_acc
+
         enable_bagging = trial.suggest_categorical('enable_bagging', [True, False])
         if enable_bagging:
             bagging_freq = trial.suggest_int('bagging_freq', 1, 30)
@@ -172,10 +201,27 @@ def hpt_lightfairgbm(data) -> pd.DataFrame:
         y_pred = model.predict(data_splits['X_test'])
         test_accuracy = accuracy_score(data_splits['y_test'], y_pred)
         test_eod = equalized_odds_difference(data_splits['y_test'], y_pred, sensitive_features=data_splits['s_test'])
-        results[str(params)] = [test_accuracy, test_eod]
 
-        print('Test accuracy: ', test_accuracy)
-        print('Test equalized odds diff: ', test_eod)
+        # --- unprocess model
+        unprocessed_clf = RelaxedThresholdOptimizer(
+            predictor=lambda X: model._pmf_predict(X)[:, -1],
+            constraint='equalized_odds',
+            tolerance=1.0
+        )
+        unprocessed_clf.fit(X=data_splits['X_val'], y=data_splits['y_val'], group=data_splits['s_val'])
+        y_pred = unprocessed_clf.predict(data_splits['X_val'], group=data_splits['s_val'])
+        val_unpr_accuracy = accuracy_score(data_splits['y_val'], y_pred)
+        val_unpr_eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
+        results[str(params)] = [test_accuracy, test_eod, val_unpr_accuracy, val_unpr_eod]
+        if val_unpr_accuracy > best_val_unpr_acc:
+            print(colored('Found a better unprocessed classifier!', 'green'))
+            best_val_unpr_acc = val_unpr_accuracy
+            best_model = model
+
+        print(colored(f'Test accuracy: {test_accuracy}', 'purple'))
+        print(colored(f'Test equalized odds diff: {test_eod}', 'purple'))
+        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'purple'))
+        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'purple'))
 
         return val_accuracy
 
@@ -183,17 +229,21 @@ def hpt_lightfairgbm(data) -> pd.DataFrame:
     study = optuna.create_study(sampler=sampler, direction='maximize')
     study.optimize(objective, n_trials=50, show_progress_bar=True)
 
-    print('Number of finished trials:', len(study.trials))
-    print('Best trial:', study.best_trial.params)
-    return results
+    print(colored(f'Number of finished trials: {len(study.trials)}', 'pink'))
+    print(colored(f'Best trial: {study.best_trial.params}', 'pink'))
+    return results, best_model
 
 
-def hpt_fairgbm(data) -> pd.DataFrame:
+def hpt_fairgbm(data) -> tuple[pd.DataFrame, FairGBMClassifier]:
     data_splits = get_splits(data)
     results = pd.DataFrame()
-    results['metric'] = ['test_acc', 'test_eod']
+    results['metric'] = ['test_acc', 'test_eod', 'val_unpr_acc', 'val_unpr_eod']
+    best_model: FairGBMClassifier = None
+    best_val_unpr_acc = float('-inf')
 
     def objective(trial):
+        nonlocal best_model, best_val_unpr_acc
+
         enable_bagging = trial.suggest_categorical('enable_bagging', [True, False])
         if enable_bagging:
             bagging_freq = trial.suggest_int('bagging_freq', 1, 30)
@@ -257,10 +307,27 @@ def hpt_fairgbm(data) -> pd.DataFrame:
         y_pred = model.predict(data_splits['X_test'])
         test_accuracy = accuracy_score(data_splits['y_test'], y_pred)
         test_eod = equalized_odds_difference(data_splits['y_test'], y_pred, sensitive_features=data_splits['s_test'])
-        results[str(params)] = [test_accuracy, test_eod]
 
-        print('Test accuracy: ', test_accuracy)
-        print('Test equalized odds diff: ', test_eod)
+        # --- unprocess model
+        unprocessed_clf = RelaxedThresholdOptimizer(
+            predictor=lambda X: model.predict_proba(X)[:, -1],
+            constraint='equalized_odds',
+            tolerance=1.0
+        )
+        unprocessed_clf.fit(X=data_splits['X_val'], y=data_splits['y_val'], group=data_splits['s_val'])
+        y_pred = unprocessed_clf.predict(data_splits['X_val'], group=data_splits['s_val'])
+        val_unpr_accuracy = accuracy_score(data_splits['y_val'], y_pred)
+        val_unpr_eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
+        results[str(params)] = [test_accuracy, test_eod, val_unpr_accuracy, val_unpr_eod]
+        if val_unpr_accuracy > best_val_unpr_acc:
+            print(colored('Found a better unprocessed classifier!', 'green'))
+            best_val_unpr_acc = val_unpr_accuracy
+            best_model = model
+
+        print(colored(f'Test accuracy: {test_accuracy}', 'purple'))
+        print(colored(f'Test equalized odds diff: {test_eod}', 'purple'))
+        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'purple'))
+        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'purple'))
 
         return max(0, val_accuracy - val_eod)
 
@@ -268,17 +335,21 @@ def hpt_fairgbm(data) -> pd.DataFrame:
     study = optuna.create_study(sampler=sampler, direction='maximize')
     study.optimize(objective, n_trials=50, show_progress_bar=True)
 
-    print('Number of finished trials:', len(study.trials))
-    print('Best trial:', study.best_trial.params)
-    return results
+    print(colored(f'Number of finished trials: {len(study.trials)}', 'pink'))
+    print(colored(f'Best trial: {study.best_trial.params}', 'pink'))
+    return results, best_model
 
 
-def hpt_catboost(data) -> pd.DataFrame:
+def hpt_catboost(data) -> tuple[pd.DataFrame, cb.CatBoostClassifier]:
     data_splits = get_splits(data)
     results = pd.DataFrame()
-    results['metric'] = ['test_acc', 'test_eod']
+    results['metric'] = ['test_acc', 'test_eod', 'val_unpr_acc', 'val_unpr_eod']
+    best_model: lgb.LGBMClassifier = None
+    best_val_unpr_acc = float('-inf')
 
     def objective(trial):
+        nonlocal best_model, best_val_unpr_acc
+
         param = {
             'eval_metric': 'Accuracy',
             'objective': trial.suggest_categorical('objective', ['Logloss', 'CrossEntropy']),
@@ -311,10 +382,27 @@ def hpt_catboost(data) -> pd.DataFrame:
         y_pred = model.predict(data_splits['X_test'])
         test_accuracy = accuracy_score(data_splits['y_test'], y_pred)
         test_eod = equalized_odds_difference(data_splits['y_test'], y_pred, sensitive_features=data_splits['s_test'])
-        results[str(param)] = [test_accuracy, test_eod]
 
-        print('Test accuracy: ', test_accuracy)
-        print('Test equalized odds diff: ', test_eod)
+        # --- unprocess model
+        unprocessed_clf = RelaxedThresholdOptimizer(
+            predictor=lambda X: model.predict_proba(X)[:, -1],
+            constraint='equalized_odds',
+            tolerance=1.0
+        )
+        unprocessed_clf.fit(X=data_splits['X_val'], y=data_splits['y_val'], group=data_splits['s_val'])
+        y_pred = unprocessed_clf.predict(data_splits['X_val'], group=data_splits['s_val'])
+        val_unpr_accuracy = accuracy_score(data_splits['y_val'], y_pred)
+        val_unpr_eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
+        results[str(param)] = [test_accuracy, test_eod, val_unpr_accuracy, val_unpr_eod]
+        if val_unpr_accuracy > best_val_unpr_acc:
+            print(colored('Found a better unprocessed classifier!', 'green'))
+            best_val_unpr_acc = val_unpr_accuracy
+            best_model = model
+
+        print(colored(f'Test accuracy: {test_accuracy}', 'purple'))
+        print(colored(f'Test equalized odds diff: {test_eod}', 'purple'))
+        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'purple'))
+        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'purple'))
 
         return val_accuracy
 
@@ -322,17 +410,21 @@ def hpt_catboost(data) -> pd.DataFrame:
     study = optuna.create_study(sampler=sampler, direction='maximize')
     study.optimize(objective, n_trials=50, show_progress_bar=True)
 
-    print('Number of finished trials:', len(study.trials))
-    print('Best trial:', study.best_trial.params)
-    return results
+    print(colored(f'Number of finished trials: {len(study.trials)}', 'pink'))
+    print(colored(f'Best trial: {study.best_trial.params}', 'pink'))
+    return results, best_model
 
 
-def hpt_catfairboost(data) -> pd.DataFrame:
+def hpt_catfairboost(data) -> tuple[pd.DataFrame, ExponentiatedGradient]:
     data_splits = get_splits(data)
     results = pd.DataFrame()
-    results['metric'] = ['test_acc', 'test_eod']
+    results['metric'] = ['test_acc', 'test_eod', 'val_unpr_acc', 'val_unpr_eod']
+    best_model: ExponentiatedGradient = None
+    best_val_unpr_acc = float('-inf')
 
     def objective(trial):
+        nonlocal best_model, best_val_unpr_acc
+
         param = {
             'eval_metric': 'Accuracy',
             'objective': trial.suggest_categorical('objective', ['Logloss', 'CrossEntropy']),
@@ -374,10 +466,27 @@ def hpt_catfairboost(data) -> pd.DataFrame:
         y_pred = model.predict(data_splits['X_test'])
         test_accuracy = accuracy_score(data_splits['y_test'], y_pred)
         test_eod = equalized_odds_difference(data_splits['y_test'], y_pred, sensitive_features=data_splits['s_test'])
-        results[str(param)] = [test_accuracy, test_eod]
 
-        print('Test accuracy: ', test_accuracy)
-        print('Test equalized odds diff: ', test_eod)
+        # --- unprocess model
+        unprocessed_clf = RelaxedThresholdOptimizer(
+            predictor=lambda X: model._pmf_predict(X)[:, -1],
+            constraint='equalized_odds',
+            tolerance=1.0
+        )
+        unprocessed_clf.fit(X=data_splits['X_val'], y=data_splits['y_val'], group=data_splits['s_val'])
+        y_pred = unprocessed_clf.predict(data_splits['X_val'], group=data_splits['s_val'])
+        val_unpr_accuracy = accuracy_score(data_splits['y_val'], y_pred)
+        val_unpr_eod = equalized_odds_difference(data_splits['y_val'], y_pred, sensitive_features=data_splits['s_val'])
+        results[str(param)] = [test_accuracy, test_eod, val_unpr_accuracy, val_unpr_eod]
+        if val_unpr_accuracy > best_val_unpr_acc:
+            print(colored('Found a better unprocessed classifier!', 'green'))
+            best_val_unpr_acc = val_unpr_accuracy
+            best_model = model
+
+        print(colored(f'Test accuracy: {test_accuracy}', 'purple'))
+        print(colored(f'Test equalized odds diff: {test_eod}', 'purple'))
+        print(colored(f'Validation unprocessed accuracy: {val_unpr_accuracy}', 'purple'))
+        print(colored(f'Validation unprocessed equalized odds diff: {val_unpr_eod}', 'purple'))
 
         return val_accuracy
 
@@ -385,9 +494,9 @@ def hpt_catfairboost(data) -> pd.DataFrame:
     study = optuna.create_study(sampler=sampler, direction='maximize')
     study.optimize(objective, n_trials=50, show_progress_bar=True)
 
-    print('Number of finished trials:', len(study.trials))
-    print('Best trial:', study.best_trial.params)
-    return results
+    print(colored(f'Number of finished trials: {len(study.trials)}', 'pink'))
+    print(colored(f'Best trial: {study.best_trial.params}', 'pink'))
+    return results, best_model
 
 
 if __name__ == '__main__':
@@ -398,6 +507,7 @@ if __name__ == '__main__':
                             'catfairboost': hpt_catfairboost}
 
     os.makedirs('hpt', exist_ok=True)
+    os.makedirs('hpt_best_models', exist_ok=True)
     os.makedirs('datasets', exist_ok=True)
 
     print('Hyperparameter tuning of our algos using random search')
@@ -410,10 +520,13 @@ if __name__ == '__main__':
         hpt_fn = model_name_to_hpt_fn[model_name]
 
         data = load_fn(problem_class, dataset_filepath)
-        results = hpt_fn(data)
-        results.set_index('metric', inplace=True)
+        results, best_model = hpt_fn(data)
 
+        results.set_index('metric', inplace=True)
         with open(f'hpt/{dataset_name}_{model_name}.pkl', 'wb') as f:
             pickle.dump(results, f)
+
+        with open(f'hpt_best_models/{dataset_name}_{model_name}.pkl', 'wb') as f:
+            pickle.dump(best_model, f)
 
         print('\n---\n')

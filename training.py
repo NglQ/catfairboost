@@ -32,7 +32,8 @@ pd.set_option('display.max_rows', None)
 np.random.seed(42)
 
 # TODO:
-#  - evaluate best val_acc and compute pareto frontier on that model
+#  - evaluate best val_acc and compute pareto frontier on that model. Therefore, in the pipeline add this functionality
+#    and add formal parameter to let the user decide if they want to use the previous functionality or use hpt results
 
 
 def train_base_lightgbm(data, data_splits, training_params):

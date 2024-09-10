@@ -11,3 +11,6 @@ fairgbm==0.9.14
 fairlearn==0.10.0
 folktables==0.0.12
 error-parity==0.3.11
+
+
+termcolor==2.4.0
