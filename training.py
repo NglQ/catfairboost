@@ -31,15 +31,11 @@ pd.set_option('display.max_rows', None)
 # Set seed for consistent results with ExponentiatedGradient
 np.random.seed(42)
 
-# TODO:
-#  - evaluate best val_acc and compute pareto frontier on that model. Therefore, in the pipeline add this functionality
-#    and add formal parameter to let the user decide if they want to use the previous functionality or use hpt results
-
 
 def train_base_lightgbm(data, data_splits, training_params):
     print('--- START LightGBM ---')
 
-    model = lgb.LGBMClassifier(verbose=0)
+    model = lgb.LGBMClassifier(verbosity=-1)
     model.set_params(**training_params)
 
     start = time()
@@ -65,8 +61,7 @@ class LightFairGBM(lgb.LGBMClassifier):
 def train_fair_lightgbm(data, data_splits, training_params):
     print('--- START LightFairGBM ---')
 
-    # NOTE: impossible to suppress warnings of LightGBM. Example: `[LightGBM] [Warning] Unknown parameter: cat_cols`.
-    model = LightFairGBM(verbose=0)
+    model = LightFairGBM(verbosity=-1)
     training_params.update({'cat_cols': data['cat_cols']})
     model.set_params(**training_params)
 

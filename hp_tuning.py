@@ -559,7 +559,7 @@ if __name__ == '__main__':
                   'if that is the case, you need to send a SIGTERM(15) signal or close the terminal.','red'))
 
     for dataset_name, model_name in itertools.product(dataset_names, model_names):
-        print(f'\n --- Dataset: {dataset_name} - Model: {model_name} ---\n')
+        print(f'\n--- Dataset: {dataset_name} - Model: {model_name} ---\n')
         load_fn = dataset_name_to_load_fn[dataset_name]
         problem_class = dataset_name_to_problem_class[dataset_name]
         dataset_filepath = f'datasets/{dataset_name}.csv'

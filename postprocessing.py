@@ -182,6 +182,17 @@ def pipeline(load_fn,
     if check_model_cache and os.path.isfile(model_filepath):
         with open(model_filepath, 'rb') as f:
             model = pickle.load(f)
+
+        if model is None:
+            print(colored('The provided model_filepath exists but the model is empty! If this model is the result of '
+                          'hpt, maybe the time budget was too low and training could not finish. '
+                          'Training with standard parameters...', 'red'))
+            model, _data, _y_pred, _training_time = training_fn(data, data_splits, training_params)
+
+            if save_results:
+                with open(model_filepath, 'wb') as f:
+                    pickle.dump(model, f)
+
         print(colored('Successfully loaded model!', 'green'))
     else:
         assert training_params is not None and training_fn is not None, ('If no model can be loaded, you need to '
@@ -271,7 +282,7 @@ if __name__ == '__main__':
     if use_hpt_data:
         print(colored('Executing main pipeline. If you want to use the results of hyperparameter tuning, run the '
                       '`hp_tuning` module first!', 'red'))
-        time.sleep(5)
+        time.sleep(3)
 
     acc_eod_results_df = pd.DataFrame(
         {'metric': ['before_unpr_acc_fit', 'before_unpr_eod_fit', 'before_unpr_acc_test', 'before_unpr_eod_test',
